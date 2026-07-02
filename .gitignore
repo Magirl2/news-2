@@ -2,8 +2,8 @@
 .secrets/
 logs/
 reports/
+news/
 __pycache__/
 *.pyc
 .venv/
 venv/
-
