@@ -1,0 +1,45 @@
+name: US Market Kakao Briefing
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 07:10 KST. This is after the regular US market close in both standard time and daylight saving time.
+    - cron: "10 22 * * 1-5"
+
+jobs:
+  send-briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      KAKAO_REDIRECT_URI: http://localhost:8765/callback
+      KAKAO_LINK_URL: https://finance.yahoo.com/markets
+      KAKAO_TOKENS_JSON: ${{ secrets.KAKAO_TOKENS_JSON }}
+      REPORT_TIMEZONE: Asia/Seoul
+      MARKET_TIMEZONE: America/New_York
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check readiness
+        run: python -m market_briefing_bot readiness
+
+      - name: Send Kakao briefing
+        run: python -m market_briefing_bot send
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-briefing-reports
+          path: |
+            reports/*.md
+            reports/*.html
+            logs/*.log
+          if-no-files-found: ignore
+

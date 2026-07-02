@@ -1,0 +1,9 @@
+.env
+.secrets/
+logs/
+reports/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
