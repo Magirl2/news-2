@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from market_briefing_bot.briefing import _sector_driver
-from market_briefing_bot.kakao import _load_tokens, explain_kakao_error, split_message
+from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
     early_close_reason,
     holiday_reason,
@@ -59,6 +59,36 @@ class KakaoMessageTests(unittest.TestCase):
     def test_load_tokens_from_environment(self) -> None:
         with patch.dict("os.environ", {"KAKAO_TOKENS_JSON": '{"refresh_token":"abc"}'}):
             self.assertEqual(_load_tokens()["refresh_token"], "abc")
+
+    def test_github_env_token_refresh_uses_new_access_token(self) -> None:
+        class ConfigStub:
+            kakao_rest_api_key = "rest-key"
+            kakao_client_secret = ""
+            kakao_link_url = "https://finance.yahoo.com/markets"
+            kakao_chunk_size = 180
+
+        calls = []
+
+        def fake_post(url, data, headers=None):
+            calls.append((url, headers or {}))
+            if "talk/memo" in url and len([call for call in calls if "talk/memo" in call[0]]) == 1:
+                raise KakaoError("Kakao API 오류: HTTP 401. 원문: access token does not exist")
+            if "oauth/token" in url:
+                return {"access_token": "new-access-token", "expires_in": 21599}
+            return {}
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"KAKAO_TOKENS_JSON": '{"access_token":"old-access-token","refresh_token":"refresh-token"}'},
+            ),
+            patch("market_briefing_bot.kakao._post_form", side_effect=fake_post),
+            patch("market_briefing_bot.kakao._save_tokens"),
+        ):
+            self.assertEqual(KakaoClient(ConfigStub()).send_text("hello"), 1)
+
+        send_headers = [headers for url, headers in calls if "talk/memo" in url]
+        self.assertEqual(send_headers[-1]["Authorization"], "Bearer new-access-token")
 
 
 class NewsSummaryTests(unittest.TestCase):

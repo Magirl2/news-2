@@ -218,16 +218,30 @@ def split_message(text: str, max_chars: int) -> list[str]:
 class KakaoClient:
     def __init__(self, config: Config):
         self.config = config
+        self._tokens: dict[str, Any] | None = None
+
+    def _load_cached_tokens(self) -> dict[str, Any]:
+        if self._tokens is None:
+            self._tokens = _load_tokens()
+        return self._tokens
 
     def _access_token(self) -> str:
-        tokens = _load_tokens()
+        tokens = self._load_cached_tokens()
         access_token = tokens.get("access_token")
         if access_token:
             return access_token
-        tokens = refresh_access_token(self.config, tokens)
+        self._tokens = refresh_access_token(self.config, tokens)
+        tokens = self._tokens
         return tokens["access_token"]
 
-    def _send_chunk(self, text: str) -> None:
+    def _refresh_access_token(self) -> str:
+        self._tokens = refresh_access_token(self.config, self._load_cached_tokens())
+        access_token = self._tokens.get("access_token")
+        if not access_token:
+            raise KakaoError("카카오 access_token을 새로 받지 못했습니다.")
+        return access_token
+
+    def _send_chunk(self, text: str, access_token: str | None = None) -> None:
         template_object = {
             "object_type": "text",
             "text": text,
@@ -238,7 +252,7 @@ class KakaoClient:
             "button_title": "시장 보기",
         }
         data = {"template_object": json.dumps(template_object, ensure_ascii=False)}
-        headers = {"Authorization": f"Bearer {self._access_token()}"}
+        headers = {"Authorization": f"Bearer {access_token or self._access_token()}"}
         _post_form(SEND_ME_URL, data, headers=headers)
 
     def send_text(self, text: str) -> int:
@@ -253,10 +267,7 @@ class KakaoClient:
             except KakaoError as exc:
                 if "401" not in str(exc):
                     raise
-                tokens = refresh_access_token(self.config, _load_tokens())
-                if not tokens.get("access_token"):
-                    raise
-                self._send_chunk(prefix + chunk)
+                self._send_chunk(prefix + chunk, self._refresh_access_token())
             if index < len(chunks):
                 time.sleep(0.4)
         return len(chunks)
