@@ -55,8 +55,11 @@ jobs:
             printf '<!doctype html><meta charset="utf-8"><p>No report generated.</p>\n' > site/index.html
           fi
 
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
