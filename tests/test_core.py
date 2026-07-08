@@ -24,6 +24,7 @@ from market_briefing_bot.news import (
     korean_news_sentiment,
     korean_news_summary,
 )
+from market_briefing_bot.watchlist import build_watchlist_review
 from market_briefing_bot.investment_plan import (
     build_investment_package,
     build_investment_report,
@@ -423,6 +424,29 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("Action report", rendered)
         self.assertNotIn("뉴스 1/5", rendered)
         self.assertNotIn("<pre", rendered)
+
+
+class WatchlistTests(unittest.TestCase):
+    def test_watchlist_review_connects_symbol_to_sector(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={
+                "Technology": Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test")
+            },
+            risk_quotes={},
+            warnings=[],
+        )
+        rows = [
+            {"date": date(2026, 7, 1), "close": 100.0},
+            {"date": date(2026, 7, 2), "close": 103.0},
+        ]
+        with patch("market_briefing_bot.watchlist.fetch_yahoo_daily", return_value=rows):
+            text, warnings = build_watchlist_review(["NVDA"], snapshot)
+        self.assertFalse(warnings)
+        self.assertIn("보유/관심종목 영향", text)
+        self.assertIn("NVDA", text)
+        self.assertIn("섹터", text)
 
 
 class CloudSecretsTests(unittest.TestCase):

@@ -19,6 +19,7 @@ from .news import (
     korean_news_summary,
 )
 from .timezones import get_timezone
+from .watchlist import build_watchlist_review
 from .investment_plan import (
     build_investment_package,
     build_previous_signal_review,
@@ -600,6 +601,8 @@ def build_briefing(config: Config) -> Briefing:
     previous_signals = load_previous_investment_signals(REPORTS_DIR, target_date)
     tracking_text, tracking_warnings = build_previous_signal_review(snapshot, previous_signals)
     warnings.extend(tracking_warnings)
+    watchlist_text, watchlist_warnings = build_watchlist_review(config.watchlist_symbols, snapshot)
+    warnings.extend(watchlist_warnings)
     strongest = sectors[0].name if sectors else ""
     weakest = sectors[-1].name if sectors else ""
 
@@ -621,6 +624,7 @@ def build_briefing(config: Config) -> Briefing:
         _risk_card(snapshot),
         *_format_news(news_items),
         tracking_text,
+        *([watchlist_text] if watchlist_text else []),
         investment_package.text,
         _today_checklist(snapshot, news_items),
         "참고: 투자 판단용 참고 정보이며 매수/매도 추천은 아닙니다.\n출처: Yahoo Finance, RSS 뉴스",

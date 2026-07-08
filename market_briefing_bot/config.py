@@ -34,6 +34,7 @@ class Config:
     market_timezone: str
     kakao_chunk_size: int
     news_rss_urls: List[str]
+    watchlist_symbols: List[str]
 
 
 def _read_env_file(path: Path) -> Dict[str, str]:
@@ -61,6 +62,10 @@ def _split_urls(raw_value: str) -> List[str]:
     return urls or DEFAULT_RSS_URLS
 
 
+def _split_list(raw_value: str) -> List[str]:
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
 def load_config() -> Config:
     env_values = _read_env_file(ENV_FILE)
     chunk_size_raw = _get_value(env_values, "KAKAO_CHUNK_SIZE", "200")
@@ -84,6 +89,7 @@ def load_config() -> Config:
         market_timezone=_get_value(env_values, "MARKET_TIMEZONE", "America/New_York"),
         kakao_chunk_size=chunk_size,
         news_rss_urls=_split_urls(_get_value(env_values, "NEWS_RSS_URLS")),
+        watchlist_symbols=[symbol.upper() for symbol in _split_list(_get_value(env_values, "WATCHLIST_SYMBOLS"))],
     )
 
 

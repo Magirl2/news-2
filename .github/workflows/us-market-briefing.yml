@@ -27,6 +27,7 @@ jobs:
       REPORT_PUBLIC_BASE_URL: https://magirl2.github.io/news-2/reports
       REPORT_TIMEZONE: Asia/Seoul
       MARKET_TIMEZONE: America/New_York
+      WATCHLIST_SYMBOLS: ${{ secrets.WATCHLIST_SYMBOLS }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
