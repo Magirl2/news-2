@@ -211,6 +211,7 @@ def fetch_top_news(feed_urls: Iterable[str], max_items: int = 5) -> tuple[List[N
     warnings: List[str] = []
     seen_titles = set()
     seen_topics = set()
+    seen_report_headlines = set()
 
     for url in feed_urls:
         try:
@@ -231,7 +232,7 @@ def fetch_top_news(feed_urls: Iterable[str], max_items: int = 5) -> tuple[List[N
     for item in items:
         label = korean_news_label(item)
         item_ai = label in {"AI/반도체", "AI/클라우드", "소프트웨어"}
-        if label_counts.get(label, 0) >= 2:
+        if label_counts.get(label, 0) >= 1:
             continue
         if item_ai and ai_count >= 3:
             continue
@@ -239,7 +240,15 @@ def fetch_top_news(feed_urls: Iterable[str], max_items: int = 5) -> tuple[List[N
         topic = re.sub(r"[^a-z0-9가-힣]+", " ", topic.lower()).strip()
         if topic in seen_topics:
             continue
+        report_headline = re.sub(
+            r"\s+",
+            " ",
+            f"{label}:{korean_news_headline(item)}".lower(),
+        ).strip()
+        if report_headline in seen_report_headlines:
+            continue
         seen_topics.add(topic)
+        seen_report_headlines.add(report_headline)
         label_counts[label] = label_counts.get(label, 0) + 1
         if item_ai:
             ai_count += 1

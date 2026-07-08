@@ -190,6 +190,28 @@ class NewsSummaryTests(unittest.TestCase):
             items, _warnings = fetch_top_news(["https://example.com/rss"], max_items=5)
         self.assertEqual(len(items), 1)
 
+    def test_duplicate_report_headline_is_selected_once(self) -> None:
+        first = NewsItem(
+            title="Apple and Broadcom shares rise on AI semiconductor supply chain optimism",
+            description="Investors are watching AI chip suppliers.",
+            link="https://example.com/1",
+            source="Yahoo",
+            published="",
+            score=10,
+        )
+        second = NewsItem(
+            title="Apple taps Broadcom as investors chase AI chip supplier winners",
+            description="Semiconductor demand remains strong.",
+            link="https://example.com/2",
+            source="CNBC",
+            published="",
+            score=9,
+        )
+        with patch("market_briefing_bot.news.fetch_rss_feed", return_value=[first, second]):
+            items, _warnings = fetch_top_news(["https://example.com/rss"], max_items=5)
+        headlines = [korean_news_headline(item) for item in items]
+        self.assertEqual(len(headlines), len(set(headlines)))
+
     def test_top_news_limits_repeated_ai_topics(self) -> None:
         feed_items = [
             NewsItem(
@@ -225,7 +247,7 @@ class NewsSummaryTests(unittest.TestCase):
         with patch("market_briefing_bot.news.fetch_rss_feed", return_value=feed_items):
             items, _warnings = fetch_top_news(["https://example.com/rss"], max_items=5)
         labels = [korean_news_label(item) for item in items]
-        self.assertLessEqual(labels.count("AI/반도체"), 2)
+        self.assertLessEqual(labels.count("AI/반도체"), 1)
         self.assertIn("고용", labels)
         self.assertIn("방산", labels)
 

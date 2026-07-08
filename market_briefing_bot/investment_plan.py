@@ -90,7 +90,8 @@ def _news_bias(news_items: list[NewsItem]) -> tuple[float, str]:
     for item in news_items:
         label = korean_news_label(item)
         sentiment, _reason = korean_news_sentiment(item)
-        labels.append(label)
+        if label not in {"뉴스", "시장"}:
+            labels.append(label)
         if sentiment == "긍정":
             score += 0.4
         elif sentiment == "중립+":
