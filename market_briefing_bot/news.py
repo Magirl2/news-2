@@ -603,6 +603,20 @@ def korean_news_sentiment(title: str | NewsItem, description: str = "") -> tuple
     return "중립", "방향성이 강하지 않아 관련 종목의 실제 가격 반응을 확인해야 합니다."
 
 
+def korean_news_importance(title: str | NewsItem, description: str = "") -> tuple[str, str]:
+    title_text, description_text, _source = _combined_text(title, description)
+    text = f"{title_text} {description_text}".lower()
+    label = korean_news_label(title_text, description_text)
+    high_impact_labels = {"금리/물가", "고용", "실적", "AI/반도체"}
+    if label in high_impact_labels:
+        return "A급", "지수 또는 주도 섹터에 직접 영향을 줄 수 있습니다."
+    if label in {"채권", "에너지", "방산", "AI/클라우드", "ETF/수급"}:
+        return "B급", "관련 섹터와 주요 종목에 영향을 줄 수 있습니다."
+    if any(word in text for word in ("apple", "microsoft", "nvidia", "tesla", "amazon", "meta", "alphabet")):
+        return "B급", "대형주라 지수 심리와 동종 업종에 영향을 줄 수 있습니다."
+    return "C급", "가격 반응이 확인될 때만 투자 판단에 반영합니다."
+
+
 def korean_news_checkpoints(title: str | NewsItem, description: str = "") -> list[str]:
     title_text, description_text, _source = _combined_text(title, description)
     text = f"{title_text} {description_text}"

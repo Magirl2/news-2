@@ -139,6 +139,8 @@ py -m market_briefing_bot prepare-cloud-secrets
 
 카카오 발송 방식과 데이터 출처를 왜 이렇게 골랐는지는 `docs\DECISIONS.md`에 정리했습니다.
 
+관심종목, 경제 이벤트, 실적 캘린더, SEC 공시용 선택 키 설정은 `docs\OPTIONAL_KEYS.md`를 보면 됩니다.
+
 ## 휴장일과 조기폐장
 
 봇은 미국 동부시간을 기준으로 NYSE 주요 휴장일과 조기폐장일을 확인합니다. 휴장일이면 메시지에 휴장 안내를 넣고, 최신으로 확인 가능한 직전 거래일 데이터를 사용합니다.

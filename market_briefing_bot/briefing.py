@@ -13,12 +13,14 @@ from .news import (
     fetch_top_news,
     korean_news_checkpoints,
     korean_news_headline,
+    korean_news_importance,
     korean_news_label,
     korean_news_related,
     korean_news_sentiment,
     korean_news_summary,
 )
 from .timezones import get_timezone
+from .earnings_calendar import build_earnings_calendar
 from .event_calendar import build_event_calendar
 from .professional_review import build_professional_review
 from .sec_filings import build_sec_filing_alert
@@ -322,16 +324,55 @@ def _first_checkpoint(item: NewsItem) -> str:
     return checkpoints[0] if checkpoints else "다음 거래일 가격과 거래량 반응 확인"
 
 
-def _news_card(index: int, item: NewsItem, max_chars: int = 168) -> str:
+def _news_price_reaction(item: NewsItem, snapshot: MarketSnapshot) -> str:
+    label = korean_news_label(item)
+    sentiment, _reason = korean_news_sentiment(item)
+    label_to_sector = {
+        "AI/반도체": "Technology",
+        "AI/클라우드": "Technology",
+        "소프트웨어": "Technology",
+        "실적": "Technology",
+        "에너지": "Energy",
+        "방산": "Industrials",
+        "ETF/수급": "Technology",
+        "시장": "Technology",
+    }
+    sector_name = label_to_sector.get(label)
+    sector_quote = snapshot.sector_quotes.get(sector_name) if sector_name else None
+    if sector_quote:
+        sector_label = SECTOR_KO.get(sector_quote.name, sector_quote.name)
+        if sentiment in {"긍정", "중립+"} and sector_quote.change_percent > 0:
+            return f"{sector_label} 가격도 강해 뉴스가 가격에 일부 인정받았습니다."
+        if sentiment in {"긍정", "중립+"} and sector_quote.change_percent < 0:
+            return f"뉴스는 우호적이지만 {sector_label} 가격은 약해 기대 선반영/차익실현 가능성을 봅니다."
+        if sentiment in {"부정", "중립-"} and sector_quote.change_percent > 0:
+            return f"뉴스는 부담이지만 {sector_label} 가격이 버텨 악재 소화 여부를 확인합니다."
+        if sentiment in {"부정", "중립-"} and sector_quote.change_percent < 0:
+            return f"뉴스와 {sector_label} 가격이 모두 약해 위험 신호로 봅니다."
+        return f"{sector_label} 가격 반응은 아직 뚜렷하지 않습니다."
+
+    if label in {"금리/물가", "채권", "고용"}:
+        ten_year = snapshot.risk_quotes.get("10Y Yield")
+        if ten_year and ten_year.change_percent > 0:
+            return f"10년물 금리 상승({format_change(ten_year.change_percent)})으로 성장주 부담을 확인합니다."
+        if ten_year and ten_year.change_percent < 0:
+            return f"10년물 금리 하락({format_change(ten_year.change_percent)})이면 성장주 반응을 확인합니다."
+    return "가격 반응은 관련 ETF와 대형주 움직임으로 재확인합니다."
+
+
+def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: int = 168) -> str:
     label = korean_news_label(item)
     headline = korean_news_headline(item)
     sentiment, reason = korean_news_sentiment(item)
+    importance, importance_reason = korean_news_importance(item)
     checkpoint = _first_checkpoint(item)
-    related = korean_news_related(item)
+    price_reaction = _news_price_reaction(item, snapshot)
     card = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
+        f"중요도: {importance} - {importance_reason}\n"
         f"핵심: {headline}\n"
         f"투자판단: {reason}\n"
+        f"가격반응: {price_reaction}\n"
         f"체크: {checkpoint}"
     )
     if len(card) <= max_chars:
@@ -353,13 +394,13 @@ def _news_card(index: int, item: NewsItem, max_chars: int = 168) -> str:
     )
 
 
-def _format_news(items: list[NewsItem]) -> list[str]:
+def _format_news(items: list[NewsItem], snapshot: MarketSnapshot) -> list[str]:
     if not items:
         return ["1. 주요 뉴스 RSS를 읽지 못했습니다. 설정과 인터넷 연결을 확인해 주세요."]
 
     cards = []
     for index, item in enumerate(items[:5], start=1):
-        cards.append(_news_card(index, item, max_chars=188))
+        cards.append(_news_card(index, item, snapshot, max_chars=260))
     return cards
 
 
@@ -424,11 +465,11 @@ def _render_report_sections(text: str) -> str:
             continue
         body = _render_report_body_lines(lines[1:])
         class_name = "report-section"
-        if "오늘의 결론" in title or "전문 투자자 체크" in title:
+        if "오늘의 결론" in title or "전문 투자자 체크" in title or "오늘 매매 가능 점수" in title:
             class_name += " report-decision"
-        elif "이벤트" in title or "SEC 공시" in title:
+        elif "이벤트" in title or "SEC 공시" in title or "실적 발표" in title:
             class_name += " report-event"
-        elif "핵심 리스크" in title or "섹터 로테이션" in title:
+        elif "핵심 리스크" in title or "섹터 로테이션" in title or "오늘의 경고" in title:
             class_name += " report-event"
         elif "전일 후보 추적" in title:
             class_name += " report-tracking"
@@ -487,11 +528,14 @@ def _write_html_report(
 
     news_cards = []
     for item in news_items[:5]:
+        importance, importance_reason = korean_news_importance(item)
         news_cards.append(
             f"""
             <li>
               <strong>{html.escape(korean_news_label(item))}: {html.escape(korean_news_headline(item))}</strong>
+              <span>중요도: {html.escape(importance)} - {html.escape(importance_reason)}</span>
               <span>{html.escape(korean_news_summary(item))}</span>
+              <span>가격반응: {html.escape(_news_price_reaction(item, snapshot))}</span>
               <span>체크: {html.escape(' / '.join(korean_news_checkpoints(item)))}</span>
               <span>관련: {html.escape(korean_news_related(item))}</span>
               <a href="{html.escape(item.link)}">{html.escape(item.source)}</a>
@@ -613,6 +657,12 @@ def build_briefing(config: Config) -> Briefing:
     warnings.extend(watchlist_warnings)
     event_text, event_warnings = build_event_calendar(config.fred_api_key, target_date)
     warnings.extend(event_warnings)
+    earnings_text, earnings_warnings = build_earnings_calendar(
+        config.watchlist_symbols,
+        config.alpha_vantage_api_key,
+        target_date,
+    )
+    warnings.extend(earnings_warnings)
     sec_text, sec_warnings = build_sec_filing_alert(
         config.watchlist_symbols,
         target_date,
@@ -641,7 +691,8 @@ def build_briefing(config: Config) -> Briefing:
         _sector_driver_card(sectors, snapshot, news_items),
         _risk_card(snapshot),
         event_text,
-        *_format_news(news_items),
+        earnings_text,
+        *_format_news(news_items, snapshot),
         tracking_text,
         *([watchlist_text] if watchlist_text else []),
         *([sec_text] if sec_text else []),

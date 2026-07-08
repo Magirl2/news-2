@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from market_briefing_bot.briefing import _render_report_sections, _sector_driver
+from market_briefing_bot.briefing import _news_price_reaction, _render_report_sections, _sector_driver
 from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
     early_close_reason,
@@ -19,11 +19,13 @@ from market_briefing_bot.news import (
     NewsItem,
     fetch_top_news,
     korean_news_headline,
+    korean_news_importance,
     korean_news_label,
     korean_news_related,
     korean_news_sentiment,
     korean_news_summary,
 )
+from market_briefing_bot.earnings_calendar import build_earnings_calendar
 from market_briefing_bot.event_calendar import build_event_calendar
 from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
@@ -472,6 +474,28 @@ class WatchlistTests(unittest.TestCase):
         self.assertIn("보유/관심종목 영향", text)
         self.assertIn("NVDA", text)
         self.assertIn("섹터", text)
+        self.assertIn("상대강도", text)
+
+    def test_watchlist_review_reports_portfolio_concentration(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={
+                "Technology": Quote("Technology", "XLK", date(2026, 7, 2), 100, 99, 1.0, "test")
+            },
+            risk_quotes={},
+            warnings=[],
+        )
+        rows = [
+            {"date": date(2026, 7, 1), "close": 100.0},
+            {"date": date(2026, 7, 2), "close": 103.0},
+        ]
+        with patch("market_briefing_bot.watchlist.fetch_yahoo_daily", return_value=rows):
+            text, warnings = build_watchlist_review(["NVDA", "MSFT"], snapshot)
+
+        self.assertFalse(warnings)
+        self.assertIn("포트폴리오 리스크 요약", text)
+        self.assertIn("쏠림", text)
 
 
 class ProfessionalReviewTests(unittest.TestCase):
@@ -505,6 +529,85 @@ class ProfessionalReviewTests(unittest.TestCase):
         self.assertIn("매매 강도", text)
         self.assertIn("무효화 조건", text)
         self.assertIn("섹터 로테이션 판정", text)
+
+    def test_professional_review_contains_trading_score_and_warning(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", date(2026, 7, 7), 100, 101, -1.0, "test"),
+                "Nasdaq": Quote("Nasdaq", "QQQ", date(2026, 7, 7), 100, 102, -2.0, "test"),
+            },
+            sector_quotes={},
+            risk_quotes={
+                "VIX": Quote("VIX", "^VIX", date(2026, 7, 7), 20, 18, 11.0, "test"),
+                "10Y Yield": Quote("10Y Yield", "^TNX", date(2026, 7, 7), 4.5, 4.4, 2.0, "test"),
+            },
+            warnings=[],
+        )
+        sectors = [
+            Quote("Utilities", "XLU", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            Quote("Technology", "XLK", date(2026, 7, 7), 100, 103, -3.0, "test"),
+        ]
+
+        text = build_professional_review(snapshot, sectors, [])
+
+        self.assertIn("오늘 매매 가능 점수", text)
+        self.assertIn("오늘의 경고", text)
+        self.assertIn("방어", text)
+
+
+class EarningsCalendarTests(unittest.TestCase):
+    def test_earnings_calendar_without_key_explains_secret(self) -> None:
+        text, warnings = build_earnings_calendar(["NVDA"], "", date(2026, 7, 7))
+        self.assertFalse(warnings)
+        self.assertIn("ALPHA_VANTAGE_API_KEY", text)
+
+    def test_earnings_calendar_reports_upcoming_watchlist_event(self) -> None:
+        csv_text = (
+            "symbol,name,reportDate,fiscalDateEnding,estimate,currency\n"
+            "NVDA,NVIDIA Corp,2026-07-20,2026-06-30,1.23,USD\n"
+        )
+        with patch("market_briefing_bot.earnings_calendar._download_text", return_value=csv_text):
+            text, warnings = build_earnings_calendar(["NVDA"], "key", date(2026, 7, 7))
+
+        self.assertFalse(warnings)
+        self.assertIn("NVDA", text)
+        self.assertIn("2026-07-20", text)
+
+
+class NewsDecisionQualityTests(unittest.TestCase):
+    def test_news_importance_marks_macro_as_high_priority(self) -> None:
+        item = NewsItem(
+            title="Fed rate path remains uncertain as inflation data looms",
+            description="Treasury yields move higher.",
+            link="https://example.com",
+            source="Example",
+            published="",
+            score=5,
+        )
+        importance, _reason = korean_news_importance(item)
+        self.assertEqual(importance, "A급")
+
+    def test_price_reaction_flags_good_news_with_weak_sector(self) -> None:
+        item = NewsItem(
+            title="Nvidia chip demand remains strong as AI semiconductor spending grows",
+            description="AI chip suppliers see demand.",
+            link="https://example.com",
+            source="Example",
+            published="",
+            score=5,
+        )
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={},
+            sector_quotes={
+                "Technology": Quote("Technology", "XLK", date(2026, 7, 7), 100, 102, -2.0, "test")
+            },
+            risk_quotes={},
+            warnings=[],
+        )
+
+        self.assertIn("가격은 약", _news_price_reaction(item, snapshot))
 
 
 class EventCalendarTests(unittest.TestCase):
@@ -563,6 +666,8 @@ class CloudSecretsTests(unittest.TestCase):
         text = _build_github_secrets_text("rest-key", {"refresh_token": "refresh"})
         self.assertIn("KAKAO_REST_API_KEY", text)
         self.assertIn("KAKAO_TOKENS_JSON", text)
+        self.assertIn("WATCHLIST_SYMBOLS", text)
+        self.assertIn("ALPHA_VANTAGE_API_KEY", text)
         self.assertIn('"refresh_token":"refresh"', text)
 
     def test_next_setup_accepts_environment_config(self) -> None:

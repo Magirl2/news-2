@@ -60,6 +60,8 @@ py -m market_briefing_bot prepare-cloud-secrets
 
 민감한 값이므로 GitHub 코드 파일에 붙여넣지 말고 반드시 Secret에만 넣어야 합니다.
 
+투자 보고서 품질을 높이는 선택 Secret(`WATCHLIST_SYMBOLS`, `FRED_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `SEC_USER_AGENT`)은 `docs\OPTIONAL_KEYS.md`에 발급 방법과 적용 방법을 정리했습니다.
+
 ## 실행 확인
 
 GitHub 저장소에서 `Actions` 탭을 열고 `US Market Kakao Briefing` 워크플로를 선택합니다.

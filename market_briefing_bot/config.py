@@ -36,6 +36,7 @@ class Config:
     news_rss_urls: List[str]
     watchlist_symbols: List[str]
     fred_api_key: str
+    alpha_vantage_api_key: str
     sec_user_agent: str
 
 
@@ -93,6 +94,7 @@ def load_config() -> Config:
         news_rss_urls=_split_urls(_get_value(env_values, "NEWS_RSS_URLS")),
         watchlist_symbols=[symbol.upper() for symbol in _split_list(_get_value(env_values, "WATCHLIST_SYMBOLS"))],
         fred_api_key=_get_value(env_values, "FRED_API_KEY"),
+        alpha_vantage_api_key=_get_value(env_values, "ALPHA_VANTAGE_API_KEY"),
         sec_user_agent=_get_value(
             env_values,
             "SEC_USER_AGENT",
