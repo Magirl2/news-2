@@ -24,7 +24,11 @@ from market_briefing_bot.news import (
     korean_news_sentiment,
     korean_news_summary,
 )
-from market_briefing_bot.investment_plan import build_investment_report
+from market_briefing_bot.investment_plan import (
+    build_investment_package,
+    build_investment_report,
+    build_previous_signal_review,
+)
 from market_briefing_bot.__main__ import (
     _already_sent,
     _build_github_secrets_text,
@@ -326,6 +330,62 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("손절 타점", report)
         self.assertIn("매수 근거", report)
         self.assertIn("손절 근거", report)
+        self.assertIn("점수", report)
+
+    def test_investment_package_exposes_signals_for_next_day_tracking(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 2), 50, 51, -2.0, "test"),
+        ]
+        rows = [
+            {"date": date(2026, 6, 26), "close": 90.0},
+            {"date": date(2026, 6, 29), "close": 92.0},
+            {"date": date(2026, 6, 30), "close": 94.0},
+            {"date": date(2026, 7, 1), "close": 96.0},
+            {"date": date(2026, 7, 2), "close": 100.0},
+        ]
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            package = build_investment_package(snapshot, sectors, [])
+        self.assertEqual(package.signals["target_date"], "2026-07-02")
+        self.assertTrue(package.signals["interest"])
+        self.assertIn("score", package.signals["interest"][0])
+
+    def test_previous_signal_review_marks_entry_hit(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 3),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        previous = {
+            "target_date": "2026-07-02",
+            "interest": [
+                {
+                    "stance": "관심 후보",
+                    "symbol": "NVDA",
+                    "name": "엔비디아",
+                    "close": 100.0,
+                    "score": 80,
+                    "entry_price": 105.0,
+                    "stop_price": 95.0,
+                }
+            ],
+            "avoid": [],
+        }
+        rows = [{"date": date(2026, 7, 3), "close": 106.0}]
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            text, warnings = build_previous_signal_review(snapshot, previous)
+        self.assertFalse(warnings)
+        self.assertIn("전일 후보 추적", text)
+        self.assertIn("매수 타점 도달", text)
 
 
 class KakaoDeliveryTextTests(unittest.TestCase):

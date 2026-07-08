@@ -19,7 +19,12 @@ from .news import (
     korean_news_summary,
 )
 from .timezones import get_timezone
-from .investment_plan import build_investment_report
+from .investment_plan import (
+    build_investment_package,
+    build_previous_signal_review,
+    load_previous_investment_signals,
+    write_investment_signals,
+)
 
 
 @dataclass(frozen=True)
@@ -275,6 +280,21 @@ def _risk_card(snapshot: MarketSnapshot) -> str:
     )
 
 
+def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[NewsItem]) -> str:
+    regime, action = _risk_regime(snapshot)
+    strong = _sector_line(sectors[:2], count=2) if sectors else "확인 불가"
+    weak = _sector_line(list(reversed(sectors[-2:])), count=2) if sectors else "확인 불가"
+    theme = _theme_from_snapshot(snapshot, news_items)
+    return (
+        "오늘의 결론\n"
+        f"시장 모드: {regime}\n"
+        f"우선 볼 섹터: {strong}\n"
+        f"조심할 섹터: {weak}\n"
+        f"핵심 테마: {theme}\n"
+        f"행동 원칙: {action}"
+    )
+
+
 def _shorten(text: str, max_chars: int) -> str:
     text = " ".join(text.split())
     if len(text) <= max_chars:
@@ -400,7 +420,11 @@ def _render_report_sections(text: str) -> str:
             continue
         body = _render_report_body_lines(lines[1:])
         class_name = "report-section"
-        if "관심" in title:
+        if "오늘의 결론" in title:
+            class_name += " report-decision"
+        elif "전일 후보 추적" in title:
+            class_name += " report-tracking"
+        elif "관심" in title:
             class_name += " report-positive"
         elif "비선호" in title or "위험" in title:
             class_name += " report-negative"
@@ -516,6 +540,8 @@ def _write_html_report(
     .report-section p {{ margin: 8px 0; }}
     .report-heading {{ background: #111827; color: #fff; border-color: #111827; }}
     .report-heading h2 {{ margin: 0; }}
+    .report-decision {{ border-left: 6px solid var(--blue); background: #f8fbff; }}
+    .report-tracking {{ border-left: 6px solid #7a5af8; background: #fbfaff; }}
     .report-positive {{ border-left: 6px solid var(--green); }}
     .report-negative {{ border-left: 6px solid var(--red); }}
     .report-list {{ margin: 8px 0 12px; padding-left: 20px; }}
@@ -569,8 +595,11 @@ def build_briefing(config: Config) -> Briefing:
     sectors = sorted(
         snapshot.sector_quotes.values(), key=lambda quote: quote.change_percent, reverse=True
     )
-    investment_text, investment_warnings = build_investment_report(snapshot, sectors, news_items)
-    warnings.extend(investment_warnings)
+    investment_package = build_investment_package(snapshot, sectors, news_items)
+    warnings.extend(investment_package.warnings)
+    previous_signals = load_previous_investment_signals(REPORTS_DIR, target_date)
+    tracking_text, tracking_warnings = build_previous_signal_review(snapshot, previous_signals)
+    warnings.extend(tracking_warnings)
     strongest = sectors[0].name if sectors else ""
     weakest = sectors[-1].name if sectors else ""
 
@@ -580,6 +609,7 @@ def build_briefing(config: Config) -> Briefing:
             f"{_join_quotes(snapshot)}\n"
             f"한줄: {_one_line(snapshot)}"
         ),
+        _today_decision(snapshot, sectors, news_items),
         (
             "섹터맵\n"
             f"강세: {_sector_line(sectors)}\n"
@@ -590,7 +620,8 @@ def build_briefing(config: Config) -> Briefing:
         _sector_driver_card(sectors, snapshot, news_items),
         _risk_card(snapshot),
         *_format_news(news_items),
-        investment_text,
+        tracking_text,
+        investment_package.text,
         _today_checklist(snapshot, news_items),
         "참고: 투자 판단용 참고 정보이며 매수/매도 추천은 아닙니다.\n출처: Yahoo Finance, RSS 뉴스",
     ]
@@ -602,6 +633,7 @@ def build_briefing(config: Config) -> Briefing:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORTS_DIR / f"{target_date.isoformat()}_briefing.md"
     report_path.write_text(text, encoding="utf-8")
+    write_investment_signals(REPORTS_DIR, investment_package)
     html_path = _write_html_report(report_path, text, snapshot, news_items)
 
     source_names = [snapshot.source] + sorted({item.source for item in news_items})

@@ -39,6 +39,11 @@ jobs:
       - name: Check readiness
         run: python -m market_briefing_bot readiness
 
+      - name: Load previous signal history
+        run: |
+          mkdir -p reports
+          curl -fsSL https://magirl2.github.io/news-2/reports/signals/latest.json -o reports/previous_signals.json || true
+
       - name: Build report
         run: python -m market_briefing_bot preview
 
@@ -47,6 +52,7 @@ jobs:
           mkdir -p site/reports
           cp reports/*.html site/reports/ 2>/dev/null || true
           cp reports/*.md site/reports/ 2>/dev/null || true
+          cp -r reports/signals site/reports/signals 2>/dev/null || true
           latest="$(ls site/reports/*_briefing.html 2>/dev/null | sort | tail -n 1)"
           if [ -n "$latest" ]; then
             latest_name="$(basename "$latest")"
