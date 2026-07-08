@@ -28,6 +28,7 @@ from market_briefing_bot.investment_plan import build_investment_report
 from market_briefing_bot.__main__ import (
     _already_sent,
     _build_github_secrets_text,
+    _kakao_delivery_text,
     _mark_send_success,
     _next_setup_step,
 )
@@ -325,6 +326,32 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("손절 타점", report)
         self.assertIn("매수 근거", report)
         self.assertIn("손절 근거", report)
+
+
+class KakaoDeliveryTextTests(unittest.TestCase):
+    def test_link_mode_sends_short_report_url_message(self) -> None:
+        class ConfigStub:
+            kakao_send_mode = "link"
+            report_public_base_url = "https://example.github.io/news-2/reports"
+            kakao_chunk_size = 200
+
+        class BriefingStub:
+            text = (
+                "미국장 마감 2026-07-07\n"
+                "S&P 500 -0.45%, Nasdaq -1.16%, Dow -0.25%\n"
+                "한줄: 방어적인 해석이 필요합니다.\n"
+                "긴 본문"
+            )
+
+            class HtmlPath:
+                name = "2026-07-07_briefing.html"
+
+            html_path = HtmlPath()
+
+        text = _kakao_delivery_text(ConfigStub(), BriefingStub())
+        self.assertIn("전체 보고서", text)
+        self.assertIn("https://example.github.io/news-2/reports/2026-07-07_briefing.html", text)
+        self.assertLessEqual(len(text), 200)
 
 
 class CloudSecretsTests(unittest.TestCase):

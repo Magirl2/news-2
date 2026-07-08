@@ -181,6 +181,27 @@ def _already_sent(target_date: str) -> bool:
     return state.get("last_success", {}).get("target_date") == target_date
 
 
+def _public_report_url(config, briefing) -> str:
+    base_url = config.report_public_base_url.strip()
+    if not base_url:
+        return ""
+    return f"{base_url.rstrip('/')}/{briefing.html_path.name}"
+
+
+def _kakao_delivery_text(config, briefing) -> str:
+    report_url = _public_report_url(config, briefing)
+    if config.kakao_send_mode != "link" or not report_url:
+        return briefing.text
+
+    lines = [line.strip() for line in briefing.text.splitlines() if line.strip()]
+    summary_lines = lines[:3] if lines else ["미국장 마감 보고서"]
+    text = "\n".join(summary_lines + ["전체 보고서:", report_url])
+    if len(text) <= config.kakao_chunk_size:
+        return text
+    title = summary_lines[0] if summary_lines else "미국장 마감 보고서"
+    return "\n".join([title, "전체 보고서:", report_url])
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     config = load_config()
     briefing = build_briefing(config)
@@ -204,7 +225,7 @@ def cmd_send(args: argparse.Namespace) -> int:
             print(f"HTML 보고서도 만들었습니다: {briefing.html_path}")
             logging.warning("Kakao token file is missing. Report was created only.")
             return 2
-        sent_count = KakaoClient(config).send_text(briefing.text)
+        sent_count = KakaoClient(config).send_text(_kakao_delivery_text(config, briefing))
         _mark_send_success(target_date, sent_count, str(briefing.report_path), str(briefing.html_path))
         logging.info("Report sent to KakaoTalk in %s chunks: %s", sent_count, briefing.report_path)
         print(f"카카오톡으로 {sent_count}개 메시지를 보냈습니다.")
@@ -242,7 +263,7 @@ def cmd_send_once(args: argparse.Namespace) -> int:
             print(f"HTML 보고서도 만들었습니다: {briefing.html_path}")
             logging.warning("Kakao token file is missing. Scheduled report was created only.")
             return 2
-        sent_count = KakaoClient(config).send_text(briefing.text)
+        sent_count = KakaoClient(config).send_text(_kakao_delivery_text(config, briefing))
         _mark_send_success(target_date, sent_count, str(briefing.report_path), str(briefing.html_path))
         logging.info("Scheduled report sent to KakaoTalk in %s chunks: %s", sent_count, briefing.report_path)
         print(f"카카오톡으로 {sent_count}개 메시지를 보냈습니다.")

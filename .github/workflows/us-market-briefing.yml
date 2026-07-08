@@ -6,15 +6,25 @@ on:
     # 07:10 KST. This is after the regular US market close in both standard time and daylight saving time.
     - cron: "10 22 * * 1-5"
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   send-briefing:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     env:
       KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
       KAKAO_REDIRECT_URI: http://localhost:8765/callback
       KAKAO_LINK_URL: https://finance.yahoo.com/markets
       KAKAO_TOKENS_JSON: ${{ secrets.KAKAO_TOKENS_JSON }}
+      KAKAO_SEND_MODE: link
+      REPORT_PUBLIC_BASE_URL: https://magirl2.github.io/news-2/reports
       REPORT_TIMEZONE: Asia/Seoul
       MARKET_TIMEZONE: America/New_York
     steps:
@@ -29,6 +39,31 @@ jobs:
       - name: Check readiness
         run: python -m market_briefing_bot readiness
 
+      - name: Build report
+        run: python -m market_briefing_bot preview
+
+      - name: Prepare Pages report
+        run: |
+          mkdir -p site/reports
+          cp reports/*.html site/reports/ 2>/dev/null || true
+          cp reports/*.md site/reports/ 2>/dev/null || true
+          latest="$(ls site/reports/*_briefing.html 2>/dev/null | sort | tail -n 1)"
+          if [ -n "$latest" ]; then
+            latest_name="$(basename "$latest")"
+            printf '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=reports/%s"><a href="reports/%s">latest report</a>\n' "$latest_name" "$latest_name" > site/index.html
+          else
+            printf '<!doctype html><meta charset="utf-8"><p>No report generated.</p>\n' > site/index.html
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
       - name: Send Kakao briefing
         run: python -m market_briefing_bot send
 
@@ -42,4 +77,3 @@ jobs:
             reports/*.html
             logs/*.log
           if-no-files-found: ignore
-

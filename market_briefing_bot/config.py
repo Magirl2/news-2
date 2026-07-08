@@ -28,6 +28,8 @@ class Config:
     kakao_redirect_uri: str
     kakao_client_secret: str
     kakao_link_url: str
+    kakao_send_mode: str
+    report_public_base_url: str
     report_timezone: str
     market_timezone: str
     kakao_chunk_size: int
@@ -76,6 +78,8 @@ def load_config() -> Config:
         kakao_link_url=_get_value(
             env_values, "KAKAO_LINK_URL", "https://finance.yahoo.com/markets"
         ),
+        kakao_send_mode=_get_value(env_values, "KAKAO_SEND_MODE", "full").lower(),
+        report_public_base_url=_get_value(env_values, "REPORT_PUBLIC_BASE_URL"),
         report_timezone=_get_value(env_values, "REPORT_TIMEZONE", "Asia/Seoul"),
         market_timezone=_get_value(env_values, "MARKET_TIMEZONE", "America/New_York"),
         kakao_chunk_size=chunk_size,
