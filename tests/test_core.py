@@ -24,6 +24,9 @@ from market_briefing_bot.news import (
     korean_news_sentiment,
     korean_news_summary,
 )
+from market_briefing_bot.event_calendar import build_event_calendar
+from market_briefing_bot.professional_review import build_professional_review
+from market_briefing_bot.sec_filings import build_sec_filing_alert
 from market_briefing_bot.watchlist import build_watchlist_review
 from market_briefing_bot.investment_plan import (
     build_investment_package,
@@ -447,6 +450,90 @@ class WatchlistTests(unittest.TestCase):
         self.assertIn("보유/관심종목 영향", text)
         self.assertIn("NVDA", text)
         self.assertIn("섹터", text)
+
+
+class ProfessionalReviewTests(unittest.TestCase):
+    def test_professional_review_sets_action_and_invalidation(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", date(2026, 7, 7), 100, 99, 1.0, "test"),
+                "Nasdaq": Quote("Nasdaq", "QQQ", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            },
+            sector_quotes={},
+            risk_quotes={
+                "VIX": Quote("VIX", "^VIX", date(2026, 7, 7), 15, 16, -6.0, "test"),
+                "10Y Yield": Quote("10Y Yield", "^TNX", date(2026, 7, 7), 4.2, 4.2, -1.2, "test"),
+            },
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 7), 100, 98, 2.0, "test"),
+            Quote("Communication Services", "XLC", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            Quote("Industrials", "XLI", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            Quote("Financials", "XLF", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            Quote("Materials", "XLB", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            Quote("Energy", "XLE", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            Quote("Health Care", "XLV", date(2026, 7, 7), 100, 101, -1.0, "test"),
+        ]
+
+        text = build_professional_review(snapshot, sectors, [])
+
+        self.assertIn("전문 투자자 체크", text)
+        self.assertIn("매매 강도", text)
+        self.assertIn("무효화 조건", text)
+        self.assertIn("섹터 로테이션 판정", text)
+
+
+class EventCalendarTests(unittest.TestCase):
+    def test_event_calendar_without_key_explains_setup(self) -> None:
+        text, warnings = build_event_calendar("", date(2026, 7, 2))
+        self.assertFalse(warnings)
+        self.assertIn("이번 주 이벤트 캘린더", text)
+        self.assertIn("FRED_API_KEY", text)
+
+    def test_event_calendar_filters_major_releases(self) -> None:
+        payload = {
+            "release_dates": [
+                {"release_id": 10, "date": "2026-07-05"},
+                {"release_id": 999, "date": "2026-07-05"},
+            ]
+        }
+        with patch("market_briefing_bot.event_calendar._download_json", return_value=payload):
+            text, warnings = build_event_calendar("key", date(2026, 7, 2))
+        self.assertFalse(warnings)
+        self.assertIn("CPI", text)
+        self.assertNotIn("999", text)
+
+
+class SecFilingTests(unittest.TestCase):
+    def test_sec_filing_alert_reports_recent_important_forms(self) -> None:
+        ticker_payload = {
+            "0": {"ticker": "AAPL", "cik_str": 320193, "title": "Apple Inc."}
+        }
+        submissions_payload = {
+            "filings": {
+                "recent": {
+                    "form": ["8-K", "4"],
+                    "filingDate": ["2026-07-01", "2026-07-01"],
+                    "accessionNumber": ["0000320193-26-000001", "0000320193-26-000002"],
+                    "primaryDocument": ["aapl-20260701.htm", "xslF345X05/doc.xml"],
+                    "primaryDocDescription": ["Current report", "Insider transaction"],
+                }
+            }
+        }
+
+        def fake_download(url, user_agent):
+            if "company_tickers" in url:
+                return ticker_payload
+            return submissions_payload
+
+        with patch("market_briefing_bot.sec_filings._download_json", side_effect=fake_download):
+            text, warnings = build_sec_filing_alert(["AAPL"], date(2026, 7, 7), "agent@example.com")
+        self.assertFalse(warnings)
+        self.assertIn("관심종목 SEC 공시", text)
+        self.assertIn("AAPL 2026-07-01 8-K", text)
+        self.assertNotIn("Insider transaction", text)
 
 
 class CloudSecretsTests(unittest.TestCase):

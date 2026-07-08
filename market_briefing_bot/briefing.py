@@ -19,6 +19,9 @@ from .news import (
     korean_news_summary,
 )
 from .timezones import get_timezone
+from .event_calendar import build_event_calendar
+from .professional_review import build_professional_review
+from .sec_filings import build_sec_filing_alert
 from .watchlist import build_watchlist_review
 from .investment_plan import (
     build_investment_package,
@@ -421,8 +424,12 @@ def _render_report_sections(text: str) -> str:
             continue
         body = _render_report_body_lines(lines[1:])
         class_name = "report-section"
-        if "오늘의 결론" in title:
+        if "오늘의 결론" in title or "전문 투자자 체크" in title:
             class_name += " report-decision"
+        elif "이벤트" in title or "SEC 공시" in title:
+            class_name += " report-event"
+        elif "핵심 리스크" in title or "섹터 로테이션" in title:
+            class_name += " report-event"
         elif "전일 후보 추적" in title:
             class_name += " report-tracking"
         elif "관심" in title:
@@ -542,6 +549,7 @@ def _write_html_report(
     .report-heading {{ background: #111827; color: #fff; border-color: #111827; }}
     .report-heading h2 {{ margin: 0; }}
     .report-decision {{ border-left: 6px solid var(--blue); background: #f8fbff; }}
+    .report-event {{ border-left: 6px solid #b54708; background: #fffbf5; }}
     .report-tracking {{ border-left: 6px solid #7a5af8; background: #fbfaff; }}
     .report-positive {{ border-left: 6px solid var(--green); }}
     .report-negative {{ border-left: 6px solid var(--red); }}
@@ -603,6 +611,15 @@ def build_briefing(config: Config) -> Briefing:
     warnings.extend(tracking_warnings)
     watchlist_text, watchlist_warnings = build_watchlist_review(config.watchlist_symbols, snapshot)
     warnings.extend(watchlist_warnings)
+    event_text, event_warnings = build_event_calendar(config.fred_api_key, target_date)
+    warnings.extend(event_warnings)
+    sec_text, sec_warnings = build_sec_filing_alert(
+        config.watchlist_symbols,
+        target_date,
+        config.sec_user_agent,
+    )
+    warnings.extend(sec_warnings)
+    professional_text = build_professional_review(snapshot, sectors, news_items)
     strongest = sectors[0].name if sectors else ""
     weakest = sectors[-1].name if sectors else ""
 
@@ -613,6 +630,7 @@ def build_briefing(config: Config) -> Briefing:
             f"한줄: {_one_line(snapshot)}"
         ),
         _today_decision(snapshot, sectors, news_items),
+        professional_text,
         (
             "섹터맵\n"
             f"강세: {_sector_line(sectors)}\n"
@@ -622,9 +640,11 @@ def build_briefing(config: Config) -> Briefing:
         ),
         _sector_driver_card(sectors, snapshot, news_items),
         _risk_card(snapshot),
+        event_text,
         *_format_news(news_items),
         tracking_text,
         *([watchlist_text] if watchlist_text else []),
+        *([sec_text] if sec_text else []),
         investment_package.text,
         _today_checklist(snapshot, news_items),
         "참고: 투자 판단용 참고 정보이며 매수/매도 추천은 아닙니다.\n출처: Yahoo Finance, RSS 뉴스",

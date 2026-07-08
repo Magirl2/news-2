@@ -28,6 +28,8 @@ jobs:
       REPORT_TIMEZONE: Asia/Seoul
       MARKET_TIMEZONE: America/New_York
       WATCHLIST_SYMBOLS: ${{ secrets.WATCHLIST_SYMBOLS }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
