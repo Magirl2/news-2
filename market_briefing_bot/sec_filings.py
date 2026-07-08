@@ -16,6 +16,7 @@ def _download_json(url: str, user_agent: str, timeout: int = 20) -> dict:
         url,
         headers={
             "User-Agent": user_agent,
+            "Accept": "application/json",
             "Accept-Encoding": "identity",
         },
     )

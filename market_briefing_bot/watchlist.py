@@ -11,6 +11,19 @@ SYMBOL_TO_SECTOR = {
     for sector, stocks in SECTOR_STOCKS.items()
     for symbol, _name in stocks
 }
+SYMBOL_TO_SECTOR.update(
+    {
+        "MU": "Technology",
+        "SNDK": "Technology",
+        "ASTS": "Communication Services",
+        "NVO": "Health Care",
+        "PLTR": "Technology",
+        "TSM": "Technology",
+        "ASML": "Technology",
+        "ARM": "Technology",
+        "SMCI": "Technology",
+    }
+)
 
 
 def _latest_change(symbol: str, snapshot: MarketSnapshot) -> tuple[float, float]:
