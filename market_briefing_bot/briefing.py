@@ -354,6 +354,67 @@ def _today_checklist(snapshot: MarketSnapshot, news_items: list[NewsItem]) -> st
     )
 
 
+def _render_report_body_lines(lines: list[str]) -> str:
+    html_parts: list[str] = []
+    in_list = False
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            close_list()
+            continue
+        if line.startswith("- "):
+            if not in_list:
+                html_parts.append('<ul class="report-list">')
+                in_list = True
+            html_parts.append(f"<li>{html.escape(line[2:])}</li>")
+            continue
+
+        close_list()
+        if len(line) > 3 and line[0].isdigit() and ". " in line[:5]:
+            html_parts.append(f'<p class="numbered-line">{html.escape(line)}</p>')
+        elif ":" in line and len(line.split(":", 1)[0]) <= 14:
+            label, value = line.split(":", 1)
+            html_parts.append(
+                f'<p class="key-line"><strong>{html.escape(label)}:</strong>{html.escape(value)}</p>'
+            )
+        else:
+            html_parts.append(f"<p>{html.escape(line)}</p>")
+
+    close_list()
+    return "\n".join(html_parts)
+
+
+def _render_report_sections(text: str) -> str:
+    sections = []
+    for block in [part.strip() for part in text.split("\n\n") if part.strip()]:
+        lines = [line.rstrip() for line in block.splitlines()]
+        title = lines[0].strip()
+        if title.startswith("뉴스 "):
+            continue
+        body = _render_report_body_lines(lines[1:])
+        class_name = "report-section"
+        if "관심" in title:
+            class_name += " report-positive"
+        elif "비선호" in title or "위험" in title:
+            class_name += " report-negative"
+        if body:
+            sections.append(
+                f'<section class="{class_name}"><h2>{html.escape(title)}</h2>{body}</section>'
+            )
+        else:
+            sections.append(
+                f'<section class="{class_name} report-heading"><h2>{html.escape(title)}</h2></section>'
+            )
+    return "\n".join(sections)
+
+
 def _write_html_report(
     report_path: Path,
     text: str,
@@ -406,39 +467,84 @@ def _write_html_report(
             """
         )
 
-    escaped_text = html.escape(text)
+    first_block = next((part.strip() for part in text.split("\n\n") if part.strip()), "")
+    first_lines = [line.strip() for line in first_block.splitlines() if line.strip()]
+    title_line = first_lines[0] if first_lines else "미국장 마감 보고서"
+    market_line = first_lines[1] if len(first_lines) > 1 else ""
+    one_line = first_lines[2] if len(first_lines) > 2 else ""
+    rendered_sections = _render_report_sections(text)
     html_text = f"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>오늘의 미국장 마감 브리핑</title>
+  <title>{html.escape(title_line)}</title>
   <style>
-    body {{ margin: 0; font-family: Arial, 'Malgun Gothic', sans-serif; background: #f5f7fb; color: #111827; }}
-    main {{ max-width: 980px; margin: 0 auto; padding: 28px 18px 48px; }}
-    h1 {{ margin: 0 0 18px; font-size: 28px; }}
-    h2 {{ margin: 28px 0 12px; font-size: 18px; }}
-    pre {{ white-space: pre-wrap; line-height: 1.55; background: #fff; border: 1px solid #e5e7eb; padding: 18px; border-radius: 8px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
-    .sector {{ background: #fff; border: 1px solid #e5e7eb; border-left: 6px solid #667085; border-radius: 8px; padding: 12px; }}
+    :root {{
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #14181f;
+      --muted: #667085;
+      --line: #d9dee7;
+      --blue: #2454a6;
+      --green: #0f7b3b;
+      --red: #b42318;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: Arial, 'Malgun Gothic', sans-serif; background: var(--bg); color: var(--ink); }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 56px; }}
+    .hero {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; margin-bottom: 18px; }}
+    .eyebrow {{ margin: 0 0 8px; color: var(--blue); font-size: 13px; font-weight: 700; }}
+    h1 {{ margin: 0; font-size: clamp(26px, 4vw, 42px); line-height: 1.15; letter-spacing: 0; }}
+    .market-line {{ margin-top: 16px; font-size: 18px; font-weight: 700; }}
+    .one-line {{ margin: 8px 0 0; color: var(--muted); font-size: 16px; line-height: 1.55; }}
+    h2 {{ margin: 28px 0 12px; font-size: 21px; line-height: 1.3; letter-spacing: 0; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }}
+    .sector {{ background: #fff; border: 1px solid #e1e5ec; border-left: 6px solid #667085; border-radius: 8px; padding: 14px; }}
     .sector-name {{ font-weight: 700; margin-bottom: 8px; }}
-    .sector-change {{ font-size: 22px; font-weight: 700; margin-bottom: 8px; }}
+    .sector-change {{ font-size: 24px; font-weight: 700; margin-bottom: 10px; }}
     .bar {{ height: 8px; background: #edf0f5; border-radius: 999px; overflow: hidden; }}
     .bar span {{ display: block; height: 100%; border-radius: 999px; }}
-    li {{ margin: 0 0 10px; line-height: 1.5; }}
-    li span {{ display: block; margin: 3px 0; }}
-    a {{ color: #175cd3; text-decoration: none; }}
+    .news-list {{ display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0; padding: 0; list-style: none; }}
+    .news-list li {{ border: 1px solid #e1e5ec; border-radius: 8px; padding: 16px; background: #fff; line-height: 1.55; }}
+    .news-list strong {{ display: block; margin-bottom: 8px; font-size: 17px; }}
+    .news-list span {{ display: block; margin: 5px 0; color: #344054; }}
+    a {{ color: var(--blue); text-decoration: none; font-weight: 700; }}
+    .report-flow {{ display: grid; gap: 0; }}
+    .report-section {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 22px; margin-top: 16px; line-height: 1.65; }}
+    .report-section h2 {{ margin-top: 0; }}
+    .report-section p {{ margin: 8px 0; }}
+    .report-heading {{ background: #111827; color: #fff; border-color: #111827; }}
+    .report-heading h2 {{ margin: 0; }}
+    .report-positive {{ border-left: 6px solid var(--green); }}
+    .report-negative {{ border-left: 6px solid var(--red); }}
+    .report-list {{ margin: 8px 0 12px; padding-left: 20px; }}
+    .report-list li {{ margin: 6px 0; }}
+    .numbered-line {{ margin-top: 16px !important; padding-top: 14px; border-top: 1px solid #edf0f5; font-weight: 700; }}
+    .key-line strong {{ display: inline-block; min-width: 86px; color: #344054; }}
+    footer {{ margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }}
+    @media (max-width: 680px) {{
+      main {{ padding: 18px 12px 44px; }}
+      .hero, .report-section {{ padding: 18px; }}
+      .market-line {{ font-size: 16px; }}
+    }}
   </style>
 </head>
 <body>
   <main>
-    <h1>오늘의 미국장 마감 브리핑</h1>
-    <h2>섹터맵 전체</h2>
+    <header class="hero">
+      <p class="eyebrow">Daily US Market Briefing</p>
+      <h1>{html.escape(title_line)}</h1>
+      <div class="market-line">{html.escape(market_line)}</div>
+      <p class="one-line">{html.escape(one_line)}</p>
+    </header>
+    <h2>섹터맵</h2>
     <div class="grid">{''.join(sector_cards)}</div>
-    <h2>주요 뉴스</h2>
-    <ol>{''.join(news_cards)}</ol>
-    <h2>카카오톡 메시지 원문</h2>
-    <pre>{escaped_text}</pre>
+    <h2>주요 뉴스 분석</h2>
+    <ol class="news-list">{''.join(news_cards)}</ol>
+    <h2>상세 보고서</h2>
+    <div class="report-flow">{rendered_sections}</div>
+    <footer>Source: Yahoo Finance, RSS feeds. This report is rule-based market reference material.</footer>
   </main>
 </body>
 </html>

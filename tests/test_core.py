@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from market_briefing_bot.briefing import _sector_driver
+from market_briefing_bot.briefing import _render_report_sections, _sector_driver
 from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
     early_close_reason,
@@ -352,6 +352,17 @@ class KakaoDeliveryTextTests(unittest.TestCase):
         self.assertIn("전체 보고서", text)
         self.assertIn("https://example.github.io/news-2/reports/2026-07-07_briefing.html", text)
         self.assertLessEqual(len(text), 200)
+
+
+class HtmlReportTests(unittest.TestCase):
+    def test_report_sections_are_not_rendered_as_raw_message_pre(self) -> None:
+        rendered = _render_report_sections(
+            "Market summary\nLine one\n\n뉴스 1/5 [Market]\nSkipped duplicate\n\nAction report\n- point one"
+        )
+        self.assertIn('class="report-section"', rendered)
+        self.assertIn("Action report", rendered)
+        self.assertNotIn("뉴스 1/5", rendered)
+        self.assertNotIn("<pre", rendered)
 
 
 class CloudSecretsTests(unittest.TestCase):
