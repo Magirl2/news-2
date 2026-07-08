@@ -24,6 +24,7 @@ from market_briefing_bot.news import (
     korean_news_sentiment,
     korean_news_summary,
 )
+from market_briefing_bot.investment_plan import build_investment_report
 from market_briefing_bot.__main__ import (
     _already_sent,
     _build_github_secrets_text,
@@ -282,6 +283,48 @@ class SectorReasonTests(unittest.TestCase):
             warnings=[],
         )
         self.assertIn("방어주 선호", _sector_driver("Utilities", -1.0, snapshot, []))
+
+
+class InvestmentPlanTests(unittest.TestCase):
+    def test_investment_report_contains_entry_stop_and_rationale(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 2), 50, 51, -2.0, "test"),
+        ]
+        rows = [
+            {"date": date(2026, 6, 26), "close": 90.0},
+            {"date": date(2026, 6, 29), "close": 92.0},
+            {"date": date(2026, 6, 30), "close": 94.0},
+            {"date": date(2026, 7, 1), "close": 96.0},
+            {"date": date(2026, 7, 2), "close": 100.0},
+        ]
+        news = [
+            NewsItem(
+                title="AI chip demand remains strong for Nvidia",
+                description="Semiconductor demand supports technology shares.",
+                link="https://example.com",
+                source="Example",
+                published="",
+                score=10,
+            )
+        ]
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            report, warnings = build_investment_report(snapshot, sectors, news)
+        self.assertFalse(warnings)
+        self.assertIn("유의 섹터", report)
+        self.assertIn("관심 후보", report)
+        self.assertIn("비선호 후보", report)
+        self.assertIn("매수 타점", report)
+        self.assertIn("손절 타점", report)
+        self.assertIn("매수 근거", report)
+        self.assertIn("손절 근거", report)
 
 
 class CloudSecretsTests(unittest.TestCase):

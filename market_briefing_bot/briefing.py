@@ -19,6 +19,7 @@ from .news import (
     korean_news_summary,
 )
 from .timezones import get_timezone
+from .investment_plan import build_investment_report
 
 
 @dataclass(frozen=True)
@@ -462,6 +463,8 @@ def build_briefing(config: Config) -> Briefing:
     sectors = sorted(
         snapshot.sector_quotes.values(), key=lambda quote: quote.change_percent, reverse=True
     )
+    investment_text, investment_warnings = build_investment_report(snapshot, sectors, news_items)
+    warnings.extend(investment_warnings)
     strongest = sectors[0].name if sectors else ""
     weakest = sectors[-1].name if sectors else ""
 
@@ -481,6 +484,7 @@ def build_briefing(config: Config) -> Briefing:
         _sector_driver_card(sectors, snapshot, news_items),
         _risk_card(snapshot),
         *_format_news(news_items),
+        investment_text,
         _today_checklist(snapshot, news_items),
         "참고: 투자 판단용 참고 정보이며 매수/매도 추천은 아닙니다.\n출처: Yahoo Finance, RSS 뉴스",
     ]
