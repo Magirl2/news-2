@@ -30,7 +30,7 @@ from .earnings_calendar import build_earnings_calendar
 from .event_calendar import build_event_calendar
 from .professional_review import build_professional_review
 from .sec_filings import build_sec_filing_alert
-from .watchlist import build_watchlist_review
+from .watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
 from .investment_plan import (
     build_investment_package,
     build_previous_signal_review,
@@ -307,6 +307,24 @@ def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[Ne
     )
 
 
+def _quick_takeaways(snapshot: MarketSnapshot, sectors: list, news_items: list[NewsItem]) -> list[tuple[str, str]]:
+    regime, action = _risk_regime(snapshot)
+    strong = _sector_line(sectors[:2], count=2) if sectors else "확인 불가"
+    weak = _sector_line(list(reversed(sectors[-2:])), count=2) if sectors else "확인 불가"
+    theme = _theme_from_snapshot(snapshot, news_items)
+    return [
+        ("시장 판단", f"{regime}: {action}"),
+        ("우선 볼 섹터", f"{strong} / 핵심 테마: {theme}"),
+        ("조심할 것", f"{weak} 약세 확산 여부와 VIX/금리 방향 확인"),
+    ]
+
+
+def _quick_takeaways_text(snapshot: MarketSnapshot, sectors: list, news_items: list[NewsItem]) -> str:
+    lines = ["오늘 3줄 결론"]
+    lines.extend(f"{label}: {value}" for label, value in _quick_takeaways(snapshot, sectors, news_items))
+    return "\n".join(lines)
+
+
 def _sentiment_points(sentiment: str) -> int:
     if sentiment == "긍정":
         return 2
@@ -552,6 +570,72 @@ def _news_dashboard_html(snapshot: MarketSnapshot, news_items: list[NewsItem]) -
     """
 
 
+def _watchlist_actions_text(actions: list[WatchlistAction]) -> str:
+    if not actions:
+        return "관심종목별 오늘 대응\n- 관심종목이 설정되지 않았거나 가격 데이터를 가져오지 못했습니다."
+    lines = ["관심종목별 오늘 대응"]
+    for action in actions:
+        lines.append(
+            f"- {action.symbol}: {action.stance} / 오늘 확인 가격: {action.check_price} / "
+            f"관련 섹터: {action.sector_text} / 뉴스 영향: {action.news_impact} / 주의 이유: {action.caution}"
+        )
+    return "\n".join(lines)
+
+
+def _mobile_quick_summary_html(
+    snapshot: MarketSnapshot,
+    sectors: list,
+    news_items: list[NewsItem],
+    watchlist_actions: list[WatchlistAction],
+) -> str:
+    takeaway_items = "".join(
+        f"<div><b>{html.escape(label)}</b><span>{html.escape(value)}</span></div>"
+        for label, value in _quick_takeaways(snapshot, sectors, news_items)
+    )
+    if watchlist_actions:
+        watch_items = "".join(
+            f"""
+            <li>
+              <strong>{html.escape(action.symbol)}</strong>
+              <span class="stance stance-{html.escape(action.stance)}">{html.escape(action.stance)}</span>
+              <small>{html.escape(action.check_price)}</small>
+              <small>{html.escape(action.news_impact)}</small>
+            </li>
+            """
+            for action in watchlist_actions[:8]
+        )
+    else:
+        watch_items = "<li><strong>관심종목 없음</strong><small>WATCHLIST_SYMBOLS를 넣으면 종목별 대응이 표시됩니다.</small></li>"
+
+    read, action_text = _news_market_read(news_items)
+    return f"""
+    <section class="quick-summary">
+      <div class="quick-head">
+        <p class="eyebrow">Mobile Quick View</p>
+        <h2>빠른 요약</h2>
+        <p>휴대폰에서 먼저 볼 핵심만 모았습니다. 아래 상세 보고서는 근거 확인용입니다.</p>
+      </div>
+      <div class="three-lines">{takeaway_items}</div>
+      <div class="quick-split">
+        <div class="quick-panel">
+          <b>뉴스 기류</b>
+          <span>{html.escape(read)}</span>
+          <small>{html.escape(action_text)}</small>
+        </div>
+        <div class="quick-panel">
+          <b>상세 확인 순서</b>
+          <span>3줄 결론 → 관심종목 → 뉴스 종합판 → 상세 보고서</span>
+          <small>시간이 없으면 여기까지만 봐도 됩니다.</small>
+        </div>
+      </div>
+      <div class="watch-actions">
+        <b>관심종목별 오늘 대응</b>
+        <ul>{watch_items}</ul>
+      </div>
+    </section>
+    """
+
+
 def _today_checklist(snapshot: MarketSnapshot, news_items: list[NewsItem]) -> str:
     sectors = sorted(
         snapshot.sector_quotes.values(), key=lambda quote: quote.change_percent, reverse=True
@@ -618,6 +702,7 @@ def _render_report_sections(text: str) -> str:
             or "전문 투자자 체크" in title
             or "오늘 매매 가능 점수" in title
             or "뉴스 종합판" in title
+            or "오늘 3줄 결론" in title
         ):
             class_name += " report-decision"
         elif "이벤트" in title or "SEC 공시" in title or "실적 발표" in title:
@@ -646,6 +731,7 @@ def _write_html_report(
     text: str,
     snapshot: MarketSnapshot,
     news_items: list[NewsItem],
+    watchlist_actions: list[WatchlistAction],
 ) -> Path:
     html_path = report_path.with_suffix(".html")
     sectors = sorted(
@@ -713,6 +799,7 @@ def _write_html_report(
     one_line = first_lines[2] if len(first_lines) > 2 else ""
     rendered_sections = _render_report_sections(text)
     news_dashboard = _news_dashboard_html(snapshot, news_items)
+    quick_summary = _mobile_quick_summary_html(snapshot, sectors, news_items, watchlist_actions)
     html_text = f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -739,6 +826,23 @@ def _write_html_report(
     .market-line {{ margin-top: 16px; font-size: 18px; font-weight: 700; }}
     .one-line {{ margin: 8px 0 0; color: var(--muted); font-size: 16px; line-height: 1.55; }}
     h2 {{ margin: 28px 0 12px; font-size: 21px; line-height: 1.3; letter-spacing: 0; }}
+    .quick-summary {{ background: #111827; color: #fff; border-radius: 8px; padding: 22px; margin: 18px 0; }}
+    .quick-summary .eyebrow {{ color: #93c5fd; margin-bottom: 6px; }}
+    .quick-head h2 {{ margin: 0 0 6px; font-size: 24px; }}
+    .quick-head p:last-child {{ margin: 0; color: #cbd5e1; line-height: 1.5; }}
+    .three-lines {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }}
+    .three-lines div, .quick-panel, .watch-actions {{ background: #1f2937; border: 1px solid #374151; border-radius: 8px; padding: 13px; }}
+    .three-lines b, .quick-panel b, .watch-actions b {{ display: block; margin-bottom: 6px; color: #f9fafb; }}
+    .three-lines span, .quick-panel span, .watch-actions small {{ color: #d1d5db; line-height: 1.5; }}
+    .quick-split {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }}
+    .quick-panel small {{ display: block; color: #9ca3af; margin-top: 5px; line-height: 1.45; }}
+    .watch-actions {{ margin-top: 10px; }}
+    .watch-actions ul {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }}
+    .watch-actions li {{ background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px; }}
+    .watch-actions strong {{ display: inline-block; margin-right: 6px; }}
+    .watch-actions small {{ display: block; margin-top: 5px; }}
+    .stance {{ display: inline-flex; align-items: center; min-height: 21px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; background: #f8fafc; color: #111827; }}
+    .detail-label {{ margin-top: 28px; padding-top: 20px; border-top: 2px solid #cbd5e1; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }}
     .sector {{ background: #fff; border: 1px solid #e1e5ec; border-left: 6px solid #667085; border-radius: 8px; padding: 14px; }}
     .sector-name {{ font-weight: 700; margin-bottom: 8px; }}
@@ -796,6 +900,8 @@ def _write_html_report(
     @media (max-width: 680px) {{
       main {{ padding: 18px 12px 44px; }}
       .hero, .report-section {{ padding: 18px; }}
+      .quick-summary {{ padding: 18px; }}
+      .three-lines, .quick-split {{ grid-template-columns: 1fr; }}
       .dashboard-head {{ display: block; }}
       .read-badge {{ margin-bottom: 10px; }}
       .market-line {{ font-size: 16px; }}
@@ -810,12 +916,13 @@ def _write_html_report(
       <div class="market-line">{html.escape(market_line)}</div>
       <p class="one-line">{html.escape(one_line)}</p>
     </header>
+    {quick_summary}
     <h2>섹터맵</h2>
     <div class="grid">{''.join(sector_cards)}</div>
     {news_dashboard}
     <h2>주요 뉴스 분석</h2>
     <ol class="news-list">{''.join(news_cards)}</ol>
-    <h2>상세 보고서</h2>
+    <h2 class="detail-label">상세 보고서</h2>
     <div class="report-flow">{rendered_sections}</div>
     <footer>Source: Yahoo Finance, RSS feeds. This report is rule-based market reference material.</footer>
   </main>
@@ -847,6 +954,12 @@ def build_briefing(config: Config) -> Briefing:
     previous_signals = load_previous_investment_signals(REPORTS_DIR, target_date)
     tracking_text, tracking_warnings = build_previous_signal_review(snapshot, previous_signals)
     warnings.extend(tracking_warnings)
+    watchlist_actions, watchlist_action_warnings = build_watchlist_actions(
+        config.watchlist_symbols,
+        snapshot,
+        news_items,
+    )
+    warnings.extend(watchlist_action_warnings)
     watchlist_text, watchlist_warnings = build_watchlist_review(config.watchlist_symbols, snapshot)
     warnings.extend(watchlist_warnings)
     event_text, event_warnings = build_event_calendar(config.fred_api_key, target_date)
@@ -873,7 +986,9 @@ def build_briefing(config: Config) -> Briefing:
             f"{_join_quotes(snapshot)}\n"
             f"한줄: {_one_line(snapshot)}"
         ),
+        _quick_takeaways_text(snapshot, sectors, news_items),
         _today_decision(snapshot, sectors, news_items),
+        _watchlist_actions_text(watchlist_actions),
         _news_dashboard(snapshot, news_items),
         professional_text,
         (
@@ -904,7 +1019,7 @@ def build_briefing(config: Config) -> Briefing:
     report_path = REPORTS_DIR / f"{target_date.isoformat()}_briefing.md"
     report_path.write_text(text, encoding="utf-8")
     write_investment_signals(REPORTS_DIR, investment_package)
-    html_path = _write_html_report(report_path, text, snapshot, news_items)
+    html_path = _write_html_report(report_path, text, snapshot, news_items, watchlist_actions)
 
     source_names = [snapshot.source] + sorted({item.source for item in news_items})
     return Briefing(

@@ -8,9 +8,11 @@ from unittest.mock import patch
 
 from market_briefing_bot.briefing import (
     _importance_badge_class,
+    _mobile_quick_summary_html,
     _news_card,
     _news_dashboard,
     _news_price_reaction,
+    _quick_takeaways_text,
     _render_report_sections,
     _sector_driver,
 )
@@ -42,7 +44,7 @@ from market_briefing_bot.earnings_calendar import build_earnings_calendar
 from market_briefing_bot.event_calendar import build_event_calendar
 from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
-from market_briefing_bot.watchlist import build_watchlist_review
+from market_briefing_bot.watchlist import build_watchlist_actions, build_watchlist_review
 from market_briefing_bot.investment_plan import (
     build_investment_package,
     build_investment_report,
@@ -353,6 +355,29 @@ class SectorReasonTests(unittest.TestCase):
         )
         self.assertIn("방어주 선호", _sector_driver("Utilities", -1.0, snapshot, []))
 
+    def test_quick_takeaways_show_three_decision_lines(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", date(2026, 7, 7), 100, 99, 1.0, "test"),
+                "Nasdaq": Quote("Nasdaq", "QQQ", date(2026, 7, 7), 100, 99, 1.0, "test"),
+            },
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 7), 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 7), 100, 101, -1.0, "test"),
+        ]
+
+        text = _quick_takeaways_text(snapshot, sectors, [])
+
+        self.assertIn("오늘 3줄 결론", text)
+        self.assertIn("시장 판단:", text)
+        self.assertIn("우선 볼 섹터:", text)
+        self.assertIn("조심할 것:", text)
+
 
 class InvestmentPlanTests(unittest.TestCase):
     def test_investment_report_contains_entry_stop_and_rationale(self) -> None:
@@ -510,6 +535,28 @@ class HtmlReportTests(unittest.TestCase):
         self.assertEqual(_importance_badge_class("B급"), "importance-b")
         self.assertEqual(_importance_badge_class("C급"), "importance-c")
 
+    def test_mobile_quick_summary_separates_fast_view_from_detail(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", date(2026, 7, 7), 100, 99, 1.0, "test")
+            },
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 7), 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 7), 100, 101, -1.0, "test"),
+        ]
+
+        html = _mobile_quick_summary_html(snapshot, sectors, [], [])
+
+        self.assertIn("빠른 요약", html)
+        self.assertIn("시장 판단", html)
+        self.assertIn("관심종목별 오늘 대응", html)
+        self.assertIn("상세 보고서", html)
+
 
 class WatchlistTests(unittest.TestCase):
     def test_watchlist_review_connects_symbol_to_sector(self) -> None:
@@ -533,6 +580,40 @@ class WatchlistTests(unittest.TestCase):
         self.assertIn("NVDA", text)
         self.assertIn("섹터", text)
         self.assertIn("상대강도", text)
+
+    def test_watchlist_actions_include_today_response_fields(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={
+                "Technology": Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test")
+            },
+            risk_quotes={},
+            warnings=[],
+        )
+        rows = [
+            {"date": date(2026, 7, 1), "close": 100.0},
+            {"date": date(2026, 7, 2), "close": 103.0},
+        ]
+        news = [
+            NewsItem(
+                title="Nvidia chip demand remains strong as AI semiconductor spending grows",
+                description="AI chip suppliers see demand.",
+                link="https://example.com",
+                source="Example",
+                published="",
+                score=5,
+            )
+        ]
+        with patch("market_briefing_bot.watchlist.fetch_yahoo_daily", return_value=rows):
+            actions, warnings = build_watchlist_actions(["NVDA"], snapshot, news)
+
+        self.assertFalse(warnings)
+        self.assertEqual(actions[0].symbol, "NVDA")
+        self.assertIn(actions[0].stance, {"긍정", "중립", "부정"})
+        self.assertIn("오늘", f"오늘 확인 가격: {actions[0].check_price}")
+        self.assertIn("뉴스", actions[0].news_impact)
+        self.assertIn("기술", actions[0].sector_text)
 
     def test_watchlist_review_reports_portfolio_concentration(self) -> None:
         snapshot = MarketSnapshot(

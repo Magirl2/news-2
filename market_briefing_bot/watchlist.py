@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 
 from .investment_plan import SECTOR_STOCKS
 from .market_data import MarketSnapshot, Quote, SECTOR_KO, fetch_yahoo_daily, format_change
+from .news import NewsItem, korean_news_label, korean_news_sentiment
+
+
+SYMBOL_TO_NAME = {
+    symbol: name
+    for _sector, stocks in SECTOR_STOCKS.items()
+    for symbol, name in stocks
+}
 
 
 SYMBOL_TO_SECTOR = {
@@ -24,6 +33,19 @@ SYMBOL_TO_SECTOR.update(
         "SMCI": "Technology",
     }
 )
+
+
+@dataclass(frozen=True)
+class WatchlistAction:
+    symbol: str
+    close: float
+    change_percent: float
+    stance: str
+    check_price: str
+    caution: str
+    sector_text: str
+    relative_strength: str
+    news_impact: str
 
 
 def _latest_change(symbol: str, snapshot: MarketSnapshot) -> tuple[float, float]:
@@ -69,6 +91,125 @@ def _relative_strength(symbol_change: float, sector_quote: Quote | None) -> str:
     return f"섹터와 유사({format_change(relative)})"
 
 
+def _news_score_for_symbol(symbol: str, sector: str | None, news_items: list[NewsItem]) -> tuple[int, str]:
+    if not news_items:
+        return 0, "관련 뉴스 확인 없음"
+
+    symbol_text = symbol.lower()
+    name_text = SYMBOL_TO_NAME.get(symbol.upper(), "").lower()
+    sector_to_labels = {
+        "Technology": {"AI/반도체", "AI/클라우드", "소프트웨어", "실적", "시장"},
+        "Communication Services": {"AI/클라우드", "시장"},
+        "Health Care": {"실적", "시장"},
+        "Industrials": {"방산", "시장"},
+        "Energy": {"에너지"},
+        "Financials": {"금리/물가", "채권", "시장"},
+        "Consumer Discretionary": {"시장", "실적"},
+        "Consumer Staples": {"시장", "실적"},
+        "Utilities": {"채권", "금리/물가"},
+        "Materials": {"시장", "실적"},
+        "Real Estate": {"채권", "금리/물가"},
+    }
+    related_labels = sector_to_labels.get(sector or "", set())
+    direct_score = 0
+    sector_score = 0
+    direct_count = 0
+    sector_count = 0
+    for item in news_items:
+        text = f"{item.title} {item.description}".lower()
+        sentiment, _reason = korean_news_sentiment(item)
+        points = 0
+        if sentiment == "긍정":
+            points = 2
+        elif sentiment == "중립+":
+            points = 1
+        elif sentiment == "중립-":
+            points = -1
+        elif sentiment == "부정":
+            points = -2
+
+        direct = symbol_text in text or bool(name_text and name_text in text)
+        if direct:
+            direct_score += points
+            direct_count += 1
+            continue
+        if korean_news_label(item) in related_labels:
+            sector_score += points
+            sector_count += 1
+
+    if direct_count:
+        if direct_score > 0:
+            return direct_score, "직접 긍정 뉴스 영향"
+        if direct_score < 0:
+            return direct_score, "직접 부정 뉴스 영향"
+        return direct_score, "직접 뉴스 영향은 중립"
+    if sector_count:
+        if sector_score > 0:
+            return sector_score, "섹터 관련 긍정 뉴스"
+        if sector_score < 0:
+            return sector_score, "섹터 관련 부정 뉴스"
+        return sector_score, "섹터 관련 뉴스는 중립"
+    return 0, "뉴스 영향 제한적"
+
+
+def _watch_stance(symbol_change: float, sector_quote: Quote | None, news_score: int) -> str:
+    sector_change = sector_quote.change_percent if sector_quote else 0.0
+    relative = symbol_change - sector_change
+    if symbol_change <= -1.5 or relative <= -2 or news_score <= -2:
+        return "부정"
+    if symbol_change >= 1.5 and relative >= -0.5 and news_score >= 0:
+        return "긍정"
+    if sector_change >= 1 and symbol_change >= 0 and news_score >= 1:
+        return "긍정"
+    return "중립"
+
+
+def _check_price_text(close: float, stance: str) -> str:
+    if stance == "긍정":
+        return f"${close:.2f} 위에서 지지 확인"
+    if stance == "부정":
+        return f"${close:.2f} 회복 전 신규매수 보류"
+    return f"${close:.2f} 기준 방향 확인"
+
+
+def build_watchlist_actions(
+    symbols: list[str],
+    snapshot: MarketSnapshot,
+    news_items: list[NewsItem] | None = None,
+) -> tuple[list[WatchlistAction], list[str]]:
+    warnings: list[str] = []
+    clean_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+    actions: list[WatchlistAction] = []
+    for symbol in clean_symbols:
+        try:
+            close, change_percent = _latest_change(symbol, snapshot)
+            sector = SYMBOL_TO_SECTOR.get(symbol)
+            sector_quote = _sector_quote_for(symbol, snapshot)
+            if sector_quote:
+                sector_name = SECTOR_KO.get(sector_quote.name, sector_quote.name)
+                sector_text = f"{sector_name} {format_change(sector_quote.change_percent)}"
+            else:
+                sector_text = "섹터 매핑 없음"
+            news_score, news_impact = _news_score_for_symbol(symbol, sector, news_items or [])
+            stance = _watch_stance(change_percent, sector_quote, news_score)
+            actions.append(
+                WatchlistAction(
+                    symbol=symbol,
+                    close=close,
+                    change_percent=change_percent,
+                    stance=stance,
+                    check_price=_check_price_text(close, stance),
+                    caution=_watch_action(change_percent, sector_quote),
+                    sector_text=sector_text,
+                    relative_strength=_relative_strength(change_percent, sector_quote),
+                    news_impact=news_impact,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"{symbol} 보유/관심종목 분석 실패: {exc}")
+    return actions, warnings
+
+
 def _portfolio_summary(symbols: list[str], snapshot: MarketSnapshot) -> str:
     sectors = []
     unmapped = 0
@@ -100,10 +241,11 @@ def _portfolio_summary(symbols: list[str], snapshot: MarketSnapshot) -> str:
 
 
 def build_watchlist_review(symbols: list[str], snapshot: MarketSnapshot) -> tuple[str, list[str]]:
-    warnings: list[str] = []
     clean_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
     if not clean_symbols:
-        return "", warnings
+        return "", []
+
+    actions, warnings = build_watchlist_actions(clean_symbols, snapshot)
 
     lines = [
         "보유/관심종목 영향",
@@ -111,21 +253,9 @@ def build_watchlist_review(symbols: list[str], snapshot: MarketSnapshot) -> tupl
         _portfolio_summary(clean_symbols, snapshot),
         "종목별 판단",
     ]
-    for symbol in clean_symbols:
-        try:
-            close, change_percent = _latest_change(symbol, snapshot)
-            sector_quote = _sector_quote_for(symbol, snapshot)
-            if sector_quote:
-                sector_name = SECTOR_KO.get(sector_quote.name, sector_quote.name)
-                sector_text = f"{sector_name} {format_change(sector_quote.change_percent)}"
-            else:
-                sector_text = "섹터 매핑 없음"
-            action = _watch_action(change_percent, sector_quote)
-            relative = _relative_strength(change_percent, sector_quote)
-            lines.append(
-                f"- {symbol}: 종가 ${close:.2f}({format_change(change_percent)}) / "
-                f"섹터 {sector_text} / 상대강도 {relative} / 판단: {action}"
-            )
-        except Exception as exc:  # noqa: BLE001
-            warnings.append(f"{symbol} 보유/관심종목 분석 실패: {exc}")
+    for action in actions:
+        lines.append(
+            f"- {action.symbol}: 종가 ${action.close:.2f}({format_change(action.change_percent)}) / "
+            f"섹터 {action.sector_text} / 상대강도 {action.relative_strength} / 판단: {action.caution}"
+        )
     return "\n".join(lines), warnings
