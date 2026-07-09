@@ -196,6 +196,91 @@ def _mark_send_failure(target_date: str | None, error: Exception) -> None:
     _write_send_state(state)
 
 
+def _short_error(error: object, limit: int = 260) -> str:
+    text = " ".join(str(error).split())
+    if not text:
+        return "원인을 확인하지 못했습니다."
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
+
+
+def _failure_action(error: object, location: str = "") -> str:
+    text = f"{location} {error}".lower()
+    if "access token" in text or "invalid_token" in text or "401" in text:
+        return "카카오 로그인 토큰이 만료됐을 가능성이 큽니다. PC에서 py -m market_briefing_bot kakao-login을 다시 실행한 뒤 새 KAKAO_TOKENS_JSON을 GitHub Secrets에 넣어 주세요."
+    if "kakao_rest_api_key" in text or "rest api" in text or "koe010" in text:
+        return "GitHub Secrets의 KAKAO_REST_API_KEY가 맞는지 확인해 주세요. Kakao Developers의 REST API 키를 넣어야 합니다."
+    if "talk_message" in text or "insufficient_scope" in text:
+        return "Kakao Developers 동의항목에서 카카오톡 메시지 전송 권한을 켠 뒤 kakao-login을 다시 실행해 주세요."
+    if "report" in text or "briefing" in text or "preview" in text or "build" in text:
+        return "보고서 생성 단계 문제일 수 있습니다. GitHub Actions의 market-briefing-reports artifact와 logs/bot.log를 확인해 주세요."
+    if "pages" in text or "deploy" in text:
+        return "GitHub Pages 배포 단계 문제일 수 있습니다. 저장소 Settings > Pages와 Actions 권한을 확인해 주세요."
+    if "timeout" in text or "timed out" in text:
+        return "외부 데이터 응답이 늦었을 수 있습니다. 잠시 뒤 GitHub Actions에서 Re-run jobs를 눌러 다시 실행해 주세요."
+    if "rss" in text or "yahoo" in text or "stooq" in text or "fred" in text:
+        return "외부 데이터 출처 문제일 수 있습니다. 보고서의 확인 필요 섹션과 GitHub Actions 로그를 확인해 주세요."
+    return "GitHub Actions 로그에서 실패한 단계의 빨간 줄을 확인하고, 필요한 Secret 값이 빠졌는지 먼저 봐 주세요."
+
+
+def _github_run_url() -> str:
+    repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com").strip().rstrip("/")
+    if repository and run_id:
+        return f"{server_url}/{repository}/actions/runs/{run_id}"
+    return ""
+
+
+def _build_failure_alert_text(
+    *,
+    location: str,
+    error: object,
+    run_url: str = "",
+    rerun_hint: str = "GitHub Actions 화면에서 Re-run jobs를 눌러 다시 실행하세요.",
+) -> str:
+    run_url = run_url or _github_run_url()
+    lines = [
+        "미국장 브리핑 자동화 실패",
+        f"실패 위치: {location or '위치 확인 필요'}",
+        f"원인: {_short_error(error)}",
+        f"내가 해야 할 일: {_failure_action(error, location)}",
+        f"다시 실행 방법: {rerun_hint}",
+    ]
+    if run_url:
+        lines.append(f"로그 링크: {run_url}")
+    return "\n".join(lines)
+
+
+def _send_failure_alert(
+    config,
+    *,
+    location: str,
+    error: object,
+    run_url: str = "",
+    rerun_hint: str = "GitHub Actions 화면에서 Re-run jobs를 눌러 다시 실행하세요.",
+) -> bool:
+    message = _build_failure_alert_text(
+        location=location,
+        error=error,
+        run_url=run_url,
+        rerun_hint=rerun_hint,
+    )
+    if not _has_kakao_token():
+        logging.warning("Kakao token is missing. Failure alert was not sent: %s", message)
+        print(message)
+        return False
+    try:
+        KakaoClient(config).send_text(message)
+        logging.info("Failure alert sent to KakaoTalk: %s", location)
+        return True
+    except Exception:
+        logging.exception("Failed to send Kakao failure alert")
+        print(message)
+        return False
+
+
 def _already_sent(target_date: str) -> bool:
     state = _read_send_state()
     return state.get("last_success", {}).get("target_date") == target_date
@@ -367,6 +452,23 @@ def cmd_send_test(args: argparse.Namespace) -> int:
     sent_count = KakaoClient(config).send_text(text)
     logging.info("Kakao test message sent in %s chunks.", sent_count)
     print(f"테스트 메시지 {sent_count}개를 보냈습니다.")
+    return 0
+
+
+def cmd_notify_failure(args: argparse.Namespace) -> int:
+    config = load_config()
+    location = args.location or os.environ.get("FAILURE_LOCATION", "GitHub Actions")
+    error = args.error or os.environ.get("FAILURE_ERROR", "자동 실행 중 한 단계가 실패했습니다.")
+    run_url = args.run_url or os.environ.get("FAILURE_RUN_URL", "") or _github_run_url()
+    rerun_hint = args.rerun_hint or "GitHub Actions 화면에서 Re-run jobs를 눌러 다시 실행하세요."
+    _mark_send_failure(None, RuntimeError(f"{location}: {error}"))
+    _send_failure_alert(
+        config,
+        location=location,
+        error=error,
+        run_url=run_url,
+        rerun_hint=rerun_hint,
+    )
     return 0
 
 
@@ -551,6 +653,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     send_test = subparsers.add_parser("send-test", help="카카오톡 테스트 메시지 보내기")
     send_test.set_defaults(func=cmd_send_test)
+
+    notify_failure = subparsers.add_parser("notify-failure", help="GitHub Actions 실패를 카카오톡으로 알리기")
+    notify_failure.add_argument("--location", default="", help="실패 위치")
+    notify_failure.add_argument("--error", default="", help="실패 원인")
+    notify_failure.add_argument("--run-url", default="", help="GitHub Actions 실행 로그 링크")
+    notify_failure.add_argument("--rerun-hint", default="", help="다시 실행 방법")
+    notify_failure.set_defaults(func=cmd_notify_failure)
 
     auth_url = subparsers.add_parser("kakao-auth-url", help="카카오 로그인 주소 만들기")
     auth_url.set_defaults(func=cmd_kakao_auth_url)

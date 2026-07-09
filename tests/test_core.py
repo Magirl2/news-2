@@ -60,6 +60,7 @@ from market_briefing_bot.investment_plan import (
 )
 from market_briefing_bot.__main__ import (
     _already_sent,
+    _build_failure_alert_text,
     _build_github_secrets_text,
     _kakao_delivery_text,
     _latest_built_briefing,
@@ -1203,6 +1204,23 @@ class SendStateTests(unittest.TestCase):
                 _mark_send_success("2026-06-30", 12, "report.md", "report.html")
                 self.assertTrue(_already_sent("2026-06-30"))
                 self.assertFalse(_already_sent("2026-07-01"))
+
+
+class FailureAlertTests(unittest.TestCase):
+    def test_failure_alert_contains_required_user_actions(self) -> None:
+        text = _build_failure_alert_text(
+            location="카카오 발송",
+            error="HTTP 401 access token does not exist",
+            run_url="https://github.com/Magirl2/news-2/actions/runs/1",
+            rerun_hint="Re-run jobs를 누르세요.",
+        )
+
+        self.assertIn("실패 위치: 카카오 발송", text)
+        self.assertIn("원인:", text)
+        self.assertIn("내가 해야 할 일:", text)
+        self.assertIn("kakao-login", text)
+        self.assertIn("다시 실행 방법: Re-run jobs를 누르세요.", text)
+        self.assertIn("로그 링크: https://github.com/Magirl2/news-2/actions/runs/1", text)
 
 
 if __name__ == "__main__":

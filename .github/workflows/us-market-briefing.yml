@@ -82,6 +82,16 @@ jobs:
       - name: Send Kakao briefing
         run: python -m market_briefing_bot send-built
 
+      - name: Notify Kakao on failure
+        if: failure()
+        continue-on-error: true
+        run: >
+          python -m market_briefing_bot notify-failure
+          --location "GitHub Actions: send-briefing"
+          --error "미국장 브리핑 workflow 중 한 단계가 실패했습니다. 실패한 단계는 이 실행 로그에서 빨간 표시를 확인해 주세요."
+          --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          --rerun-hint "위 로그 링크를 열고 오른쪽 위 Re-run jobs를 누르세요."
+
       - name: Upload report artifacts
         if: always()
         uses: actions/upload-artifact@v4
