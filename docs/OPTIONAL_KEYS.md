@@ -100,3 +100,27 @@ GitHub Secrets 이름:
 - `KAKAO_REST_API_KEY`
 - `KAKAO_TOKENS_JSON`
 
+## 5. OpenAI 뉴스 해석
+
+GitHub Secrets 이름:
+
+`OPENAI_API_KEY`
+
+선택 Secret:
+
+`OPENAI_MODEL`
+
+값 예시:
+
+`gpt-5.5`
+
+효과:
+
+- 기사별 `핵심 요약`
+- `투자 해석`
+- `리스크`
+- `확인 포인트`
+
+를 OpenAI API로 더 자연스럽게 작성합니다.
+
+비워 두면 보고서 생성은 실패하지 않고 기존 규칙 기반 해석을 자동으로 사용합니다.

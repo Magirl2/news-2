@@ -37,6 +37,8 @@ class Config:
     watchlist_symbols: List[str]
     fred_api_key: str
     alpha_vantage_api_key: str
+    openai_api_key: str
+    openai_model: str
     sec_user_agent: str
 
 
@@ -95,6 +97,8 @@ def load_config() -> Config:
         watchlist_symbols=[symbol.upper() for symbol in _split_list(_get_value(env_values, "WATCHLIST_SYMBOLS"))],
         fred_api_key=_get_value(env_values, "FRED_API_KEY"),
         alpha_vantage_api_key=_get_value(env_values, "ALPHA_VANTAGE_API_KEY"),
+        openai_api_key=_get_value(env_values, "OPENAI_API_KEY"),
+        openai_model=_get_value(env_values, "OPENAI_MODEL", "gpt-5.5"),
         sec_user_agent=_get_value(
             env_values,
             "SEC_USER_AGENT",

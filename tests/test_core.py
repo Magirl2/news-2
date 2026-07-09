@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -61,6 +62,10 @@ from market_briefing_bot.__main__ import (
     _latest_built_briefing,
     _mark_send_success,
     _next_setup_step,
+)
+from market_briefing_bot.ai_news import (
+    build_news_interpretations,
+    rule_based_news_interpretation,
 )
 
 
@@ -294,6 +299,67 @@ class NewsSummaryTests(unittest.TestCase):
         self.assertLessEqual(labels.count("AI/반도체"), 1)
         self.assertIn("고용", labels)
         self.assertIn("방산", labels)
+
+
+class AiNewsInterpretationTests(unittest.TestCase):
+    def test_rule_based_interpretation_has_investor_fields(self) -> None:
+        item = NewsItem(
+            title="Nvidia chip demand remains strong as AI semiconductor spending grows",
+            description="AI chip suppliers see demand.",
+            link="https://example.com",
+            source="Example",
+            published="",
+            score=10,
+        )
+
+        interpretation = rule_based_news_interpretation(item)
+
+        self.assertEqual(interpretation.source, "규칙 기반")
+        self.assertTrue(interpretation.core_summary)
+        self.assertTrue(interpretation.investment_read)
+        self.assertTrue(interpretation.risks)
+        self.assertTrue(interpretation.checkpoints)
+
+    def test_openai_interpretation_parses_response(self) -> None:
+        item = NewsItem(
+            title="Fed rate path remains uncertain as inflation data looms",
+            description="Treasury yields move higher.",
+            link="https://example.com/fed",
+            source="Example",
+            published="",
+            score=10,
+        )
+        payload = {
+            "output_text": json.dumps(
+                {
+                    "core_summary": "금리 경로 불확실성이 다시 커졌습니다.",
+                    "investment_read": "성장주에는 부담, 금융주는 상대적으로 확인이 필요합니다.",
+                    "risks": "금리가 더 오르면 밸류에이션 압박이 커질 수 있습니다.",
+                    "checkpoints": ["10년물 금리", "QQQ 반응", "VIX 방향"],
+                },
+                ensure_ascii=False,
+            )
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        with patch("market_briefing_bot.ai_news.urllib.request.urlopen", return_value=FakeResponse()):
+            interpretations, warnings = build_news_interpretations([item], api_key="key", model="test-model")
+
+        self.assertFalse(warnings)
+        interpretation = interpretations[item.link]
+        self.assertEqual(interpretation.source, "OpenAI")
+        self.assertIn("금리 경로", interpretation.core_summary)
+        self.assertIn("성장주", interpretation.investment_read)
+        self.assertEqual(interpretation.checkpoints[0], "10년물 금리")
 
 
 class SectorReasonTests(unittest.TestCase):

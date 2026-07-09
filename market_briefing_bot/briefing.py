@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import REPORTS_DIR, Config
+from .ai_news import NewsInterpretation, build_news_interpretations, rule_based_news_interpretation
 from .market_calendar import current_market_note, last_completed_trading_day
 from .market_data import MarketSnapshot, Quote, RISK_KO, SECTOR_KO, fetch_market_snapshot, format_change
 from .news import (
@@ -734,6 +735,7 @@ def _news_card(
     snapshot: MarketSnapshot,
     max_chars: int = 168,
     watchlist_actions: list[WatchlistAction] | None = None,
+    interpretation: NewsInterpretation | None = None,
 ) -> str:
     label = korean_news_label(item)
     headline = korean_news_headline(item)
@@ -743,18 +745,23 @@ def _news_card(
     price_reaction = _news_price_reaction(item, snapshot)
     bull_case, bear_case = korean_news_scenario(item)
     signals = korean_news_next_signals(item)
+    interpretation = interpretation or rule_based_news_interpretation(item)
+    checkpoint_text = " / ".join(interpretation.checkpoints)
     card = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"중요도: {importance} - {importance_reason}\n"
         f"영향 분류: {impact} - {impact_reason}\n"
         f"원문: {item.title}\n"
         f"핵심: {headline}\n"
+        f"핵심 요약({interpretation.source}): {interpretation.core_summary}\n"
         f"무슨 내용: {korean_news_plain_explanation(item)}\n"
         f"왜 중요: {korean_news_why_it_matters(item)}\n"
-        f"투자 해석: {reason} {korean_news_thinking_frame(item)}\n"
+        f"투자 해석: {interpretation.investment_read}\n"
+        f"리스크: {interpretation.risks}\n"
         f"가격반응: {price_reaction}\n"
         f"긍정 시나리오: {bull_case}\n"
         f"부정 시나리오: {bear_case}\n"
+        f"확인 포인트: {checkpoint_text}\n"
         f"확인 신호: {' / '.join(signals)}\n"
         f"관련: {korean_news_related(item)}\n"
         f"출처: {item.source} {item.link}"
@@ -766,9 +773,10 @@ def _news_card(
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"영향 분류: {impact}\n"
         f"핵심: {_shorten(headline, 54)}\n"
-        f"무슨 내용: {_shorten(korean_news_plain_explanation(item), 92)}\n"
-        f"투자 해석: {_shorten(korean_news_thinking_frame(item), 92)}\n"
-        f"확인 신호: {_shorten(' / '.join(signals), 72)}"
+        f"핵심 요약: {_shorten(interpretation.core_summary, 92)}\n"
+        f"투자 해석: {_shorten(interpretation.investment_read, 92)}\n"
+        f"리스크: {_shorten(interpretation.risks, 72)}\n"
+        f"확인 포인트: {_shorten(checkpoint_text, 72)}"
     )
     if len(compact) <= max_chars:
         return compact
@@ -776,8 +784,8 @@ def _news_card(
     return (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"핵심: {_shorten(headline, 62)}\n"
-        f"무슨 내용: {_shorten(korean_news_plain_explanation(item), 86)}\n"
-        f"투자 해석: {_shorten(korean_news_thinking_frame(item), 86)}"
+        f"핵심 요약: {_shorten(interpretation.core_summary, 86)}\n"
+        f"투자 해석: {_shorten(interpretation.investment_read, 86)}"
     )
 
 
@@ -785,6 +793,7 @@ def _format_news(
     items: list[NewsItem],
     snapshot: MarketSnapshot,
     watchlist_actions: list[WatchlistAction] | None = None,
+    interpretations: dict[str, NewsInterpretation] | None = None,
 ) -> list[str]:
     if not items:
         return ["1. 주요 뉴스 RSS를 읽지 못했습니다. 설정과 인터넷 연결을 확인해 주세요."]
@@ -798,6 +807,7 @@ def _format_news(
                 snapshot,
                 max_chars=1100,
                 watchlist_actions=watchlist_actions or [],
+                interpretation=(interpretations or {}).get(item.link),
             )
         )
     return cards
@@ -1010,6 +1020,7 @@ def _write_html_report(
     snapshot: MarketSnapshot,
     news_items: list[NewsItem],
     watchlist_actions: list[WatchlistAction],
+    interpretations: dict[str, NewsInterpretation] | None = None,
 ) -> Path:
     html_path = report_path.with_suffix(".html")
     sectors = sorted(
@@ -1082,7 +1093,9 @@ def _write_html_report(
         sentiment, sentiment_reason = korean_news_sentiment(item)
         bull_case, bear_case = korean_news_scenario(item)
         signals = korean_news_next_signals(item)
+        interpretation = (interpretations or {}).get(item.link) or rule_based_news_interpretation(item)
         signal_items = "".join(f"<li>{html.escape(signal)}</li>" for signal in signals)
+        checkpoint_items = "".join(f"<li>{html.escape(checkpoint)}</li>" for checkpoint in interpretation.checkpoints)
         news_cards.append(
             f"""
             <li>
@@ -1090,13 +1103,16 @@ def _write_html_report(
               <span class="original-title">원문: {html.escape(item.title)}</span>
               <span class="importance-line">중요도 <b class="importance-badge {importance_class}">{html.escape(importance)}</b> {html.escape(importance_reason)}</span>
               <span class="impact-line">영향 분류 <b class="impact-badge {impact_class}">{html.escape(impact)}</b> {html.escape(impact_reason)}</span>
+              <span><b>핵심 요약({html.escape(interpretation.source)}):</b> {html.escape(interpretation.core_summary)}</span>
               <span><b>무슨 내용:</b> {html.escape(korean_news_plain_explanation(item))}</span>
               <span><b>왜 중요:</b> {html.escape(korean_news_why_it_matters(item))}</span>
-              <span><b>투자 해석:</b> <em class="sentiment">{html.escape(sentiment)}</em> - {html.escape(sentiment_reason)} {html.escape(korean_news_thinking_frame(item))}</span>
+              <span><b>투자 해석:</b> <em class="sentiment">{html.escape(sentiment)}</em> - {html.escape(interpretation.investment_read)}</span>
+              <span><b>리스크:</b> {html.escape(interpretation.risks)}</span>
               <span><b>가격반응:</b> {html.escape(_news_price_reaction(item, snapshot))}</span>
               <span><b>긍정 시나리오:</b> {html.escape(bull_case)}</span>
               <span><b>부정 시나리오:</b> {html.escape(bear_case)}</span>
               <span><b>관련:</b> {html.escape(korean_news_related(item))}</span>
+              <div class="signal-block"><b>확인 포인트</b><ul>{checkpoint_items}</ul></div>
               <div class="signal-block"><b>다음날 확인 신호</b><ul>{signal_items}</ul></div>
               <a href="{html.escape(item.link)}">{html.escape(item.source)}</a>
             </li>
@@ -1277,6 +1293,12 @@ def build_briefing(config: Config) -> Briefing:
     news_items, news_warnings = fetch_top_news(config.news_rss_urls)
     warnings.extend(snapshot.warnings)
     warnings.extend(news_warnings)
+    news_interpretations, interpretation_warnings = build_news_interpretations(
+        news_items,
+        api_key=config.openai_api_key,
+        model=config.openai_model,
+    )
+    warnings.extend(interpretation_warnings)
 
     sectors = sorted(
         snapshot.sector_quotes.values(), key=lambda quote: quote.change_percent, reverse=True
@@ -1335,7 +1357,7 @@ def build_briefing(config: Config) -> Briefing:
         _risk_card(snapshot),
         event_text,
         earnings_text,
-        *_format_news(news_items, snapshot, watchlist_actions),
+        *_format_news(news_items, snapshot, watchlist_actions, news_interpretations),
         tracking_text,
         *([watchlist_text] if watchlist_text else []),
         *([sec_text] if sec_text else []),
@@ -1352,7 +1374,14 @@ def build_briefing(config: Config) -> Briefing:
     report_path = REPORTS_DIR / f"{target_date.isoformat()}_briefing.md"
     report_path.write_text(text, encoding="utf-8")
     write_investment_signals(REPORTS_DIR, investment_package)
-    html_path = _write_html_report(report_path, text, snapshot, news_items, watchlist_actions)
+    html_path = _write_html_report(
+        report_path,
+        text,
+        snapshot,
+        news_items,
+        watchlist_actions,
+        news_interpretations,
+    )
 
     source_names = [snapshot.source] + sorted({item.source for item in news_items})
     return Briefing(
