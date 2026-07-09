@@ -507,6 +507,127 @@ def korean_news_summary(title: str | NewsItem, description: str = "") -> str:
     return f"{subject} 관련 뉴스입니다. 단기 매매보다 시장심리와 관련 업종 반응을 확인하는 용도로 보세요."
 
 
+def korean_news_plain_explanation(title: str | NewsItem, description: str = "") -> str:
+    title_text, description_text, _source = _combined_text(title, description)
+    text = f"{title_text} {description_text}"
+    label = korean_news_label(title_text, description_text)
+    subject = _subject_text(label, text)
+    event = _event_text(text)
+    headline = korean_news_headline(title_text, description_text)
+    return f"{headline}입니다. 쉽게 말해 {subject} 쪽에서 {event}가 투자심리에 영향을 주는 뉴스입니다."
+
+
+def korean_news_why_it_matters(title: str | NewsItem, description: str = "") -> str:
+    title_text, description_text, _source = _combined_text(title, description)
+    label = korean_news_label(title_text, description_text)
+    if label == "AI/반도체":
+        return "AI/반도체는 최근 지수 주도력이 큰 테마라, 이 뉴스가 좋게 해석되면 나스닥과 성장주 심리에 바로 연결될 수 있습니다."
+    if label == "AI/클라우드":
+        return "AI 인프라 지출은 반도체 수요를 만들지만 비용 부담도 큽니다. 매출화 신호인지, 지출 부담 신호인지 구분해야 합니다."
+    if label == "소프트웨어":
+        return "소프트웨어주는 AI가 위협인지 생산성 개선인지에 따라 밸류에이션이 크게 달라질 수 있습니다."
+    if label == "금리/물가":
+        return "금리와 물가는 주식의 할인율을 바꿉니다. 금리가 오르면 성장주가 눌리고, 금리가 내려가면 성장주 반등 근거가 생깁니다."
+    if label == "고용":
+        return "고용은 연준의 금리 판단과 경기 판단을 동시에 흔듭니다. 약한 고용은 금리 인하 기대와 경기 둔화 우려를 같이 만듭니다."
+    if label == "실적":
+        return "실적 뉴스는 해당 기업뿐 아니라 동종 업계의 매출 성장률과 마진 기대를 다시 평가하게 만듭니다."
+    if label == "채권":
+        return "채권금리 방향은 성장주, 배당주, 부동산/유틸리티 같은 금리 민감 섹터의 상대 강도를 바꿉니다."
+    if label == "에너지":
+        return "유가는 에너지 기업에는 호재가 될 수 있지만, 물가와 소비 비용에는 부담이 될 수 있어 시장 해석이 갈릴 수 있습니다."
+    if label == "방산":
+        return "방산 뉴스는 정책과 예산이 실제 수주로 이어질 수 있는지에 따라 산업재 섹터 모멘텀이 생깁니다."
+    if label == "ETF/수급":
+        return "ETF 자금 흐름은 실제 돈이 어디로 이동하는지 보여줍니다. 테마가 지속되는지, 과열되는지 판단하는 단서입니다."
+    return "이 뉴스는 단독 매매 신호라기보다 시장이 어떤 이야기에 반응하는지 확인하는 재료입니다."
+
+
+def korean_news_thinking_frame(title: str | NewsItem, description: str = "") -> str:
+    title_text, description_text, _source = _combined_text(title, description)
+    label = korean_news_label(title_text, description_text)
+    sentiment, _reason = korean_news_sentiment(title_text, description_text)
+    if sentiment in {"긍정", "중립+"}:
+        tone = "우호적인 뉴스지만, 이미 가격이 많이 오른 뒤라면 추격보다 다음날 거래량과 상대강도 확인이 먼저입니다."
+    elif sentiment in {"부정", "중립-"}:
+        tone = "부담스러운 뉴스라면 바로 매수하기보다 관련 ETF가 지수보다 약해지는지 확인하는 게 우선입니다."
+    elif sentiment == "혼재":
+        tone = "좋은 점과 나쁜 점이 같이 있으므로 지수보다 섹터 내부 승자와 패자를 나눠 보는 뉴스입니다."
+    else:
+        tone = "방향성이 강하지 않으므로 가격 반응이 확인될 때만 판단에 반영하는 편이 낫습니다."
+
+    if label in {"AI/반도체", "AI/클라우드", "소프트웨어"}:
+        return f"{tone} 특히 AI 테마가 대형주 한두 개가 아니라 관련 공급망으로 넓어지는지 봐야 합니다."
+    if label in {"금리/물가", "고용", "채권"}:
+        return f"{tone} 핵심은 뉴스 자체보다 10년물 금리, 달러, 나스닥이 같은 방향으로 반응하는지입니다."
+    if label in {"방산", "에너지", "ETF/수급"}:
+        return f"{tone} 관련 섹터 ETF가 시장보다 강한지, 하루짜리 뉴스로 끝나는지 구분해야 합니다."
+    return tone
+
+
+def korean_news_scenario(title: str | NewsItem, description: str = "") -> tuple[str, str]:
+    title_text, description_text, _source = _combined_text(title, description)
+    label = korean_news_label(title_text, description_text)
+    if label == "AI/반도체":
+        return (
+            "반도체와 전력/장비/메모리까지 같이 오르면 AI 투자 사이클 지속 신호입니다.",
+            "대형 반도체만 오르고 주변 공급망이 못 따라오면 쏠림 또는 차익실현 위험입니다.",
+        )
+    if label == "AI/클라우드":
+        return (
+            "클라우드 매출과 반도체 수요가 같이 강해지면 AI 지출이 성과로 바뀌는 신호입니다.",
+            "매출보다 비용 증가가 부각되면 빅테크 마진 부담으로 해석될 수 있습니다.",
+        )
+    if label == "소프트웨어":
+        return (
+            "SaaS 종목이 나스닥보다 강하면 AI 우려가 과도했다는 재평가가 나올 수 있습니다.",
+            "실적 전망이 나빠지면 저가 매수 논리보다 구조적 둔화 우려가 커집니다.",
+        )
+    if label in {"금리/물가", "고용", "채권"}:
+        return (
+            "금리 하락과 나스닥 강세가 같이 나오면 성장주에는 우호적인 조합입니다.",
+            "금리 상승, 달러 강세, 나스닥 약세가 같이 나오면 위험자산 부담 신호입니다.",
+        )
+    if label == "방산":
+        return (
+            "방산주와 산업재 ETF가 지수보다 강하면 정책 모멘텀이 가격에 반영되는 신호입니다.",
+            "뉴스는 좋아도 주가가 반응하지 않으면 이미 기대가 반영됐을 수 있습니다.",
+        )
+    if label == "에너지":
+        return (
+            "유가 상승과 에너지주 강세가 같이 나오면 섹터 모멘텀은 유지됩니다.",
+            "유가 상승이 금리와 물가 우려를 키우면 시장 전체에는 부담이 될 수 있습니다.",
+        )
+    if label == "ETF/수급":
+        return (
+            "자금 유입과 가격 상승이 같이 나오면 수급이 테마를 밀어주는 신호입니다.",
+            "자금 유입에도 가격이 밀리면 과열 해소나 매물 출회 가능성을 봐야 합니다.",
+        )
+    return (
+        "관련 섹터가 지수보다 강하면 투자자들이 뉴스에 반응하고 있다는 뜻입니다.",
+        "관련 종목이 반응하지 않으면 단기 재료로만 끝날 가능성이 큽니다.",
+    )
+
+
+def korean_news_next_signals(title: str | NewsItem, description: str = "") -> list[str]:
+    signals = korean_news_checkpoints(title, description)
+    title_text, description_text, _source = _combined_text(title, description)
+    label = korean_news_label(title_text, description_text)
+    if label in {"AI/반도체", "AI/클라우드", "소프트웨어"}:
+        signals.append("SMH/XLK가 SPY보다 강한지 확인")
+    elif label in {"금리/물가", "고용", "채권"}:
+        signals.append("10년물 금리와 QQQ 방향이 같은지 확인")
+    elif label == "방산":
+        signals.append("ITA와 주요 방산주가 산업재보다 강한지 확인")
+    elif label == "에너지":
+        signals.append("유가와 XLE가 같은 방향인지 확인")
+    elif label == "ETF/수급":
+        signals.append("거래량 증가가 가격 상승과 같이 나오는지 확인")
+    else:
+        signals.append("관련 ETF가 다음 거래일에도 지수보다 강한지 확인")
+    return signals[:4]
+
+
 def korean_news_sentiment(title: str | NewsItem, description: str = "") -> tuple[str, str]:
     title_text, description_text, _source = _combined_text(title, description)
     text = f"{title_text} {description_text}"

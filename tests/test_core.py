@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from market_briefing_bot.briefing import (
     _importance_badge_class,
+    _news_card,
     _news_price_reaction,
     _render_report_sections,
     _sector_driver,
@@ -27,8 +28,13 @@ from market_briefing_bot.news import (
     korean_news_headline,
     korean_news_importance,
     korean_news_label,
+    korean_news_next_signals,
+    korean_news_plain_explanation,
     korean_news_related,
+    korean_news_scenario,
     korean_news_sentiment,
+    korean_news_thinking_frame,
+    korean_news_why_it_matters,
     korean_news_summary,
 )
 from market_briefing_bot.earnings_calendar import build_earnings_calendar
@@ -132,6 +138,24 @@ class NewsSummaryTests(unittest.TestCase):
         self.assertEqual(korean_news_label(item), "AI/반도체")
         self.assertIn("엔비디아 밖", korean_news_headline(item))
         self.assertIn("공급망", korean_news_summary(item))
+
+    def test_news_analysis_explains_content_and_decision_frame(self) -> None:
+        item = NewsItem(
+            title="Record chip rally adds $2 trillion in combined value to Micron, Intel and AMD",
+            description="Wall Street poured into chipmakers not named Nvidia as the AI boom expanded.",
+            link="https://example.com",
+            source="Example",
+            published="",
+            score=10,
+        )
+
+        self.assertIn("쉽게 말해", korean_news_plain_explanation(item))
+        self.assertIn("왜 중요", f"왜 중요: {korean_news_why_it_matters(item)}")
+        self.assertIn("거래량", korean_news_thinking_frame(item))
+        bull_case, bear_case = korean_news_scenario(item)
+        self.assertIn("긍정", f"긍정: {bull_case}")
+        self.assertIn("위험", bear_case)
+        self.assertGreaterEqual(len(korean_news_next_signals(item)), 3)
 
     def test_etf_flow_gets_flow_label(self) -> None:
         title = "Investors piled into ETFs at a record pace. Here is where their money is flowing."
@@ -641,6 +665,34 @@ class NewsDecisionQualityTests(unittest.TestCase):
         )
 
         self.assertIn("가격은 약", _news_price_reaction(item, snapshot))
+
+    def test_news_card_contains_investor_explanation_sections(self) -> None:
+        item = NewsItem(
+            title="Nvidia chip demand remains strong as AI semiconductor spending grows",
+            description="AI chip suppliers see demand.",
+            link="https://example.com",
+            source="Example",
+            published="",
+            score=5,
+        )
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={},
+            sector_quotes={
+                "Technology": Quote("Technology", "XLK", date(2026, 7, 7), 100, 99, 1.0, "test")
+            },
+            risk_quotes={},
+            warnings=[],
+        )
+
+        card = _news_card(1, item, snapshot, max_chars=1200)
+
+        self.assertIn("무슨 내용:", card)
+        self.assertIn("왜 중요:", card)
+        self.assertIn("투자 해석:", card)
+        self.assertIn("긍정 시나리오:", card)
+        self.assertIn("부정 시나리오:", card)
+        self.assertIn("확인 신호:", card)
 
 
 class EventCalendarTests(unittest.TestCase):

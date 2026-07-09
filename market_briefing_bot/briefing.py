@@ -13,10 +13,15 @@ from .news import (
     fetch_top_news,
     korean_news_checkpoints,
     korean_news_headline,
+    korean_news_next_signals,
     korean_news_importance,
     korean_news_label,
+    korean_news_plain_explanation,
     korean_news_related,
+    korean_news_scenario,
     korean_news_sentiment,
+    korean_news_thinking_frame,
+    korean_news_why_it_matters,
     korean_news_summary,
 )
 from .timezones import get_timezone
@@ -373,15 +378,23 @@ def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: 
     headline = korean_news_headline(item)
     sentiment, reason = korean_news_sentiment(item)
     importance, importance_reason = korean_news_importance(item)
-    checkpoint = _first_checkpoint(item)
     price_reaction = _news_price_reaction(item, snapshot)
+    bull_case, bear_case = korean_news_scenario(item)
+    signals = korean_news_next_signals(item)
     card = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"중요도: {importance} - {importance_reason}\n"
+        f"원문: {item.title}\n"
         f"핵심: {headline}\n"
-        f"투자판단: {reason}\n"
+        f"무슨 내용: {korean_news_plain_explanation(item)}\n"
+        f"왜 중요: {korean_news_why_it_matters(item)}\n"
+        f"투자 해석: {reason} {korean_news_thinking_frame(item)}\n"
         f"가격반응: {price_reaction}\n"
-        f"체크: {checkpoint}"
+        f"긍정 시나리오: {bull_case}\n"
+        f"부정 시나리오: {bear_case}\n"
+        f"확인 신호: {' / '.join(signals)}\n"
+        f"관련: {korean_news_related(item)}\n"
+        f"출처: {item.source} {item.link}"
     )
     if len(card) <= max_chars:
         return card
@@ -389,8 +402,9 @@ def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: 
     compact = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"핵심: {_shorten(headline, 54)}\n"
-        f"투자판단: {_shorten(reason, 60)}\n"
-        f"체크: {_shorten(checkpoint, 44)}"
+        f"무슨 내용: {_shorten(korean_news_plain_explanation(item), 92)}\n"
+        f"투자 해석: {_shorten(korean_news_thinking_frame(item), 92)}\n"
+        f"확인 신호: {_shorten(' / '.join(signals), 72)}"
     )
     if len(compact) <= max_chars:
         return compact
@@ -398,7 +412,8 @@ def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: 
     return (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"핵심: {_shorten(headline, 62)}\n"
-        f"투자판단: {_shorten(reason, 66)}"
+        f"무슨 내용: {_shorten(korean_news_plain_explanation(item), 86)}\n"
+        f"투자 해석: {_shorten(korean_news_thinking_frame(item), 86)}"
     )
 
 
@@ -408,7 +423,7 @@ def _format_news(items: list[NewsItem], snapshot: MarketSnapshot) -> list[str]:
 
     cards = []
     for index, item in enumerate(items[:5], start=1):
-        cards.append(_news_card(index, item, snapshot, max_chars=260))
+        cards.append(_news_card(index, item, snapshot, max_chars=1100))
     return cards
 
 
@@ -538,15 +553,24 @@ def _write_html_report(
     for item in news_items[:5]:
         importance, importance_reason = korean_news_importance(item)
         importance_class = _importance_badge_class(importance)
+        sentiment, sentiment_reason = korean_news_sentiment(item)
+        bull_case, bear_case = korean_news_scenario(item)
+        signals = korean_news_next_signals(item)
+        signal_items = "".join(f"<li>{html.escape(signal)}</li>" for signal in signals)
         news_cards.append(
             f"""
             <li>
               <strong>{html.escape(korean_news_label(item))}: {html.escape(korean_news_headline(item))}</strong>
+              <span class="original-title">원문: {html.escape(item.title)}</span>
               <span class="importance-line">중요도 <b class="importance-badge {importance_class}">{html.escape(importance)}</b> {html.escape(importance_reason)}</span>
-              <span>{html.escape(korean_news_summary(item))}</span>
-              <span>가격반응: {html.escape(_news_price_reaction(item, snapshot))}</span>
-              <span>체크: {html.escape(' / '.join(korean_news_checkpoints(item)))}</span>
-              <span>관련: {html.escape(korean_news_related(item))}</span>
+              <span><b>무슨 내용:</b> {html.escape(korean_news_plain_explanation(item))}</span>
+              <span><b>왜 중요:</b> {html.escape(korean_news_why_it_matters(item))}</span>
+              <span><b>투자 해석:</b> <em class="sentiment">{html.escape(sentiment)}</em> - {html.escape(sentiment_reason)} {html.escape(korean_news_thinking_frame(item))}</span>
+              <span><b>가격반응:</b> {html.escape(_news_price_reaction(item, snapshot))}</span>
+              <span><b>긍정 시나리오:</b> {html.escape(bull_case)}</span>
+              <span><b>부정 시나리오:</b> {html.escape(bear_case)}</span>
+              <span><b>관련:</b> {html.escape(korean_news_related(item))}</span>
+              <div class="signal-block"><b>다음날 확인 신호</b><ul>{signal_items}</ul></div>
               <a href="{html.escape(item.link)}">{html.escape(item.source)}</a>
             </li>
             """
@@ -594,11 +618,17 @@ def _write_html_report(
     .news-list li {{ border: 1px solid #e1e5ec; border-radius: 8px; padding: 16px; background: #fff; line-height: 1.55; }}
     .news-list strong {{ display: block; margin-bottom: 8px; font-size: 17px; }}
     .news-list span {{ display: block; margin: 5px 0; color: #344054; }}
+    .news-list b {{ color: #1d2939; }}
+    .news-list em {{ font-style: normal; font-weight: 800; }}
+    .original-title {{ color: #667085 !important; font-size: 13px; }}
     .news-list .importance-line {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #1d2939; }}
     .importance-badge {{ display: inline-flex; align-items: center; min-height: 22px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 800; line-height: 1; }}
     .importance-a {{ color: #b42318; background: #fff1f3; border-color: #fecdca; }}
     .importance-b {{ color: #b54708; background: #fffaeb; border-color: #fedf89; }}
     .importance-c {{ color: #175cd3; background: #eff8ff; border-color: #b2ddff; }}
+    .signal-block {{ margin-top: 10px; padding: 12px; background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 8px; }}
+    .signal-block ul {{ margin: 8px 0 0; padding-left: 20px; }}
+    .signal-block li {{ margin: 4px 0; padding: 0; border: 0; border-radius: 0; background: transparent; line-height: 1.45; }}
     a {{ color: var(--blue); text-decoration: none; font-weight: 700; }}
     .report-flow {{ display: grid; gap: 0; }}
     .report-section {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 22px; margin-top: 16px; line-height: 1.65; }}
