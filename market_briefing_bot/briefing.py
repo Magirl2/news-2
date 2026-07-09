@@ -1093,6 +1093,7 @@ def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
 def _render_report_body_lines(lines: list[str]) -> str:
     html_parts: list[str] = []
     in_list = False
+    table_rows: list[list[str]] = []
 
     def close_list() -> None:
         nonlocal in_list
@@ -1100,11 +1101,37 @@ def _render_report_body_lines(lines: list[str]) -> str:
             html_parts.append("</ul>")
             in_list = False
 
+    def close_table() -> None:
+        nonlocal table_rows
+        if not table_rows:
+            return
+        header = table_rows[0]
+        body = table_rows[1:]
+        head_html = "".join(f"<th>{html.escape(cell)}</th>" for cell in header)
+        body_html = "".join(
+            "<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>"
+            for row in body
+        )
+        html_parts.append(
+            f'<div class="report-table-wrap"><table class="report-table"><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table></div>'
+        )
+        table_rows = []
+
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
             close_list()
+            close_table()
             continue
+        if line.startswith("|") and line.endswith("|"):
+            close_list()
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if cells and all(set(cell) <= {"-"} for cell in cells if cell):
+                continue
+            table_rows.append(cells)
+            continue
+
+        close_table()
         if line.startswith("- "):
             if not in_list:
                 html_parts.append('<ul class="report-list">')
@@ -1124,6 +1151,7 @@ def _render_report_body_lines(lines: list[str]) -> str:
             html_parts.append(f"<p>{html.escape(line)}</p>")
 
     close_list()
+    close_table()
     return "\n".join(html_parts)
 
 
@@ -1404,6 +1432,11 @@ def _write_html_report(
     .report-negative {{ border-left: 6px solid var(--red); }}
     .report-list {{ margin: 8px 0 12px; padding-left: 20px; }}
     .report-list li {{ margin: 6px 0; }}
+    .report-table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 16px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fff; }}
+    .report-table {{ width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px; }}
+    .report-table th, .report-table td {{ padding: 9px 10px; border-bottom: 1px solid #edf0f5; text-align: left; vertical-align: top; }}
+    .report-table th {{ background: #f8fafc; color: #344054; font-weight: 800; white-space: nowrap; }}
+    .report-table td {{ color: #1d2939; line-height: 1.45; }}
     .numbered-line {{ margin-top: 16px !important; padding-top: 14px; border-top: 1px solid #edf0f5; font-weight: 700; }}
     .key-line strong {{ display: inline-block; min-width: 86px; color: #344054; }}
     footer {{ margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }}

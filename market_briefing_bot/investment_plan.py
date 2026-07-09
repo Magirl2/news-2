@@ -29,6 +29,25 @@ class StockPlan:
     stop_point: str
     buy_basis: str
     stop_basis: str
+    setup_type: str
+    judgement: str
+    ma20: float | None
+    ma50: float | None
+    ma20_distance_percent: float | None
+    ma50_distance_percent: float | None
+    ma20_slope_percent: float | None
+    ma50_slope_percent: float | None
+    volume_ratio: float | None
+    volume_ratio_3d: float | None
+    volume_status: str
+    chart_confidence_score: int
+    chart_confidence_grade: str
+    today_score: int
+    today_grade: str
+    check_price: float
+    invalidation_price: float
+    why_today: str
+    why_not_yet: str
 
 
 @dataclass(frozen=True)
@@ -59,6 +78,71 @@ def _money(value: float) -> str:
     return f"${value:.2f}"
 
 
+def _pct(current: float, base: float | None) -> float | None:
+    if not base:
+        return None
+    return ((current - base) / base) * 100
+
+
+def _avg(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _moving_average(rows: list[dict], period: int, key: str = "close") -> float | None:
+    values = [float(row[key]) for row in rows[-period:] if row.get(key) is not None]
+    if len(values) < period:
+        return None
+    return _avg(values)
+
+
+def _moving_average_slope(rows: list[dict], period: int, lookback: int = 5) -> float | None:
+    if len(rows) < period + lookback:
+        return None
+    current = _moving_average(rows, period)
+    previous = _moving_average(rows[:-lookback], period)
+    return _pct(current, previous) if current is not None else None
+
+
+def _distance_text(value: float | None) -> str:
+    return "데이터 부족" if value is None else format_change(value)
+
+
+def _price_text(value: float | None) -> str:
+    return "데이터 부족" if value is None else _money(value)
+
+
+def _ratio_text(value: float | None) -> str:
+    return "확인 필요" if value is None else f"{value:.2f}배"
+
+
+def _grade(score: int) -> str:
+    if score >= 80:
+        return "A"
+    if score >= 60:
+        return "B"
+    return "C"
+
+
+def _volume_status(volume_ratio: float | None, volume_ratio_3d: float | None, up_day: bool) -> str:
+    if volume_ratio is None:
+        return "거래량 확인 필요"
+    if up_day and volume_ratio >= 1.3:
+        return "반등 거래량 강함"
+    if volume_ratio >= 1.2 or (volume_ratio_3d is not None and volume_ratio_3d >= 1.2):
+        return "거래량 양호"
+    if volume_ratio < 0.8:
+        return "거래량 부족"
+    return "거래량 보통"
+
+
+def _support_price(close: float, ma20: float | None, recent_low: float) -> float:
+    if ma20:
+        return max(ma20, recent_low)
+    return recent_low
+
+
 def _eligible_rows(symbol: str, snapshot: MarketSnapshot) -> list[dict]:
     rows = [row for row in fetch_yahoo_daily(symbol) if row["date"] <= snapshot.target_date]
     if len(rows) < 5:
@@ -74,13 +158,50 @@ def _stock_metrics(symbol: str, snapshot: MarketSnapshot) -> dict:
     close = float(current["close"])
     previous_close = float(previous["close"])
     change_percent = ((close - previous_close) / previous_close) * 100
-    recent_high = max(float(row["close"]) for row in recent)
-    recent_low = min(float(row["close"]) for row in recent)
+    highs = [float(row.get("high", row["close"])) for row in recent]
+    lows = [float(row.get("low", row["close"])) for row in recent]
+    recent_high = max(highs)
+    recent_low = min(lows)
+    closes = [float(row["close"]) for row in rows]
+    ma20 = _moving_average(rows, 20)
+    ma50 = _moving_average(rows, 50)
+    ma20_distance = _pct(close, ma20)
+    ma50_distance = _pct(close, ma50)
+    ma20_slope = _moving_average_slope(rows, 20)
+    ma50_slope = _moving_average_slope(rows, 50)
+    recent_5_change = _pct(close, closes[-6]) if len(closes) >= 6 else None
+    volumes = [float(row["volume"]) for row in rows if row.get("volume") not in (None, "")]
+    recent_volumes = [float(row["volume"]) for row in rows[-20:] if row.get("volume") not in (None, "")]
+    volume_20_avg = _avg(recent_volumes) if len(recent_volumes) >= 10 else None
+    current_volume = float(current["volume"]) if current.get("volume") not in (None, "") else None
+    recent_3_volumes = [float(row["volume"]) for row in rows[-3:] if row.get("volume") not in (None, "")]
+    volume_ratio = current_volume / volume_20_avg if current_volume and volume_20_avg else None
+    volume_ratio_3d = (
+        (_avg(recent_3_volumes) or 0) / volume_20_avg
+        if len(recent_3_volumes) == 3 and volume_20_avg
+        else None
+    )
+    has_ohlcv = all(
+        key in current for key in ("open", "high", "low", "volume")
+    ) and bool(volumes)
+    up_day = close > previous_close
     return {
         "close": close,
         "change_percent": change_percent,
         "recent_high": recent_high,
         "recent_low": recent_low,
+        "ma20": ma20,
+        "ma50": ma50,
+        "ma20_distance_percent": ma20_distance,
+        "ma50_distance_percent": ma50_distance,
+        "ma20_slope_percent": ma20_slope,
+        "ma50_slope_percent": ma50_slope,
+        "recent_5_change_percent": recent_5_change,
+        "volume_ratio": volume_ratio,
+        "volume_ratio_3d": volume_ratio_3d,
+        "volume_status": _volume_status(volume_ratio, volume_ratio_3d, up_day),
+        "has_ohlcv": has_ohlcv,
+        "up_day": up_day,
     }
 
 
@@ -154,21 +275,128 @@ def _score_reasons(
     return reasons
 
 
+def _chart_confidence(metrics: dict, sector_quote: Quote) -> int:
+    score = 45
+    ma20_distance = metrics["ma20_distance_percent"]
+    ma50_distance = metrics["ma50_distance_percent"]
+    ma20_slope = metrics["ma20_slope_percent"]
+    ma50_slope = metrics["ma50_slope_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    if metrics["has_ohlcv"]:
+        score += 15
+    else:
+        score -= 25
+    if ma20_slope is not None and ma20_slope > 0:
+        score += 10
+    if ma50_slope is not None and ma50_slope > 0:
+        score += 10
+    if ma20_distance is not None and ma20_distance >= -2:
+        score += 5
+    if ma50_distance is not None and ma50_distance >= 0:
+        score += 5
+    if volume_ratio is not None:
+        if volume_ratio >= 1.3 and metrics["up_day"]:
+            score += 15
+        elif volume_ratio >= 1.2:
+            score += 10
+        elif volume_ratio < 0.8:
+            score -= 10
+    if metrics["change_percent"] > sector_quote.change_percent:
+        score += 5
+    if ma20_distance is not None and ma20_distance >= 8:
+        score -= 18
+    if ma20_distance is not None and ma20_distance <= -3:
+        score -= 15
+    if ma50_distance is not None and ma50_distance < 0:
+        score -= 10
+    return max(0, min(100, round(score)))
+
+
+def _today_attractiveness(metrics: dict, sector_quote: Quote, news_score: float) -> int:
+    score = 35
+    ma20_distance = metrics["ma20_distance_percent"]
+    ma50_distance = metrics["ma50_distance_percent"]
+    ma20_slope = metrics["ma20_slope_percent"]
+    ma50_slope = metrics["ma50_slope_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    recent_5_change = metrics["recent_5_change_percent"]
+    if ma20_distance is not None and -2 <= ma20_distance <= 5:
+        score += 30
+    elif ma20_distance is not None and 5 < ma20_distance < 8:
+        score += 8
+    if ma20_slope is not None and ma20_slope > 0:
+        score += 10
+    if ma50_slope is not None and ma50_slope > 0:
+        score += 6
+    if ma50_distance is not None and ma50_distance >= 0:
+        score += 8
+    if volume_ratio is not None:
+        if volume_ratio >= 1.3 and metrics["up_day"]:
+            score += 18
+        elif volume_ratio >= 1.2:
+            score += 14
+        elif volume_ratio < 0.8:
+            score -= 15
+    else:
+        score -= 10
+    if sector_quote.change_percent > 0:
+        score += min(12, sector_quote.change_percent * 4)
+    if metrics["change_percent"] > sector_quote.change_percent:
+        score += 6
+    score += max(-6, min(6, news_score * 5))
+    if ma20_distance is not None and ma20_distance >= 8:
+        score -= 35
+    if recent_5_change is not None and recent_5_change >= 10:
+        score -= 20
+    if ma20_distance is not None and ma20_distance <= -3:
+        score -= 25
+    if ma50_distance is not None and ma50_distance < 0:
+        score -= 18
+    return max(0, min(100, round(score)))
+
+
+def _classify_interest(metrics: dict, today_score: int) -> tuple[str, str]:
+    ma20_distance = metrics["ma20_distance_percent"]
+    ma50_distance = metrics["ma50_distance_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    recent_5_change = metrics["recent_5_change_percent"]
+    if (ma20_distance is not None and ma20_distance >= 8) or (
+        recent_5_change is not None and recent_5_change >= 10
+    ):
+        return "추격 위험형", "신규 진입 관망"
+    if ma20_distance is not None and ma20_distance <= -3:
+        return "관망형", "20일선 회복 전 관망"
+    if ma50_distance is not None and ma50_distance < 0:
+        return "관망형", "50일선 회복 전 관망"
+    if ma20_distance is not None and -2 <= ma20_distance <= 5:
+        if volume_ratio is None:
+            return "거래량 부족형", "거래량 확인 필요"
+        if volume_ratio >= 1.2 and today_score >= 70:
+            return "20일선 지지 확인형", "오늘 확인 후보"
+        return "눌림목 대기형", "거래량 확인 후 판단"
+    if ma20_distance is not None and 5 < ma20_distance < 8:
+        return "돌파 대기형", "돌파 확인 전 관망"
+    return "관망형", "가격 확인 전 관망"
+
+
 def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSnapshot, news_items: list[NewsItem]) -> StockPlan:
     metrics = _stock_metrics(symbol, snapshot)
     close = metrics["close"]
     change_percent = metrics["change_percent"]
     recent_high = metrics["recent_high"]
     recent_low = metrics["recent_low"]
+    ma20 = metrics["ma20"]
+    ma50 = metrics["ma50"]
     news_score, news_labels = _news_bias(news_items)
     breakout = max(close * 1.01, recent_high * 1.001)
-    support = max(recent_low * 1.01, close * 0.96)
-    stop = min(breakout * 0.93, support * 0.985)
-    if stop >= breakout:
-        stop = breakout * 0.93
-    raw_score = sector_quote.change_percent * 2 + change_percent + news_score
-    if close >= recent_high * 0.97:
-        raw_score += 0.6
+    support = _support_price(close, ma20, recent_low)
+    stop = min(support * 0.985, close * 0.96)
+    if stop >= close:
+        stop = close * 0.96
+    today_score = _today_attractiveness(metrics, sector_quote, news_score)
+    chart_score = _chart_confidence(metrics, sector_quote)
+    setup_type, judgement = _classify_interest(metrics, today_score)
+    raw_score = (today_score - 50) / 5
     score = _score_100(raw_score)
     sector_name = SECTOR_KO.get(sector_quote.name, sector_quote.name)
     reasons = _score_reasons(
@@ -179,8 +407,28 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         news_labels,
         is_interest=True,
     )
+    if metrics["ma20_distance_percent"] is not None:
+        reasons.append(f"20일선 거리 {_distance_text(metrics['ma20_distance_percent'])}")
+    reasons.append(metrics["volume_status"])
+    if setup_type == "추격 위험형":
+        reasons.append("20일선 이격/단기 급등으로 추격 위험")
+    check_price = breakout
+    invalidation_price = stop
+    why_today = (
+        f"{sector_name} 섹터가 {format_change(sector_quote.change_percent)}이고 "
+        f"{symbol}은 20일선 거리 {_distance_text(metrics['ma20_distance_percent'])}, "
+        f"거래량은 20일 평균 대비 {_ratio_text(metrics['volume_ratio'])}입니다."
+    )
+    if judgement == "오늘 확인 후보":
+        why_today += " 20일선 근처에서 거래량이 받쳐주는지 확인할 만합니다."
+    elif setup_type == "추격 위험형":
+        why_today += " 추세와 관심은 살아 있지만 신규 진입은 눌림 확인이 먼저입니다."
+    why_not_yet = (
+        f"확인 가격 {_money(check_price)}를 넘기 전에는 단순 반등일 수 있고, "
+        f"{_money(invalidation_price)} 이탈 시 20일선 지지 시나리오가 약해집니다."
+    )
     return StockPlan(
-        stance="관심 후보",
+        stance=judgement,
         symbol=symbol,
         name=name,
         sector=sector_name,
@@ -193,10 +441,29 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         entry_price=breakout,
         support_price=support,
         stop_price=stop,
-        buy_point=f"{_money(breakout)} 돌파 확인 또는 {_money(support)} 부근 지지 확인 시 분할매수",
-        stop_point=f"{_money(stop)} 종가 이탈 시 손절 또는 비중 축소",
-        buy_basis=f"{sector_name} 섹터가 {format_change(sector_quote.change_percent)}로 상대 강세이고 {symbol}은 당일 {format_change(change_percent)} 움직였습니다. 관련 뉴스 축은 {news_labels}입니다.",
-        stop_basis=f"최근 가격 지지 구간({_money(support)})이 깨지면 섹터 강세가 종목 수급으로 이어진다는 가정이 훼손됩니다.",
+        buy_point=f"확인 가격 {_money(check_price)} 돌파 또는 20일선 근처({_price_text(ma20)}) 지지 확인",
+        stop_point=f"무효화 가격 {_money(invalidation_price)} 이탈 시 관망 전환",
+        buy_basis=why_today,
+        stop_basis=why_not_yet,
+        setup_type=setup_type,
+        judgement=judgement,
+        ma20=ma20,
+        ma50=ma50,
+        ma20_distance_percent=metrics["ma20_distance_percent"],
+        ma50_distance_percent=metrics["ma50_distance_percent"],
+        ma20_slope_percent=metrics["ma20_slope_percent"],
+        ma50_slope_percent=metrics["ma50_slope_percent"],
+        volume_ratio=metrics["volume_ratio"],
+        volume_ratio_3d=metrics["volume_ratio_3d"],
+        volume_status=metrics["volume_status"],
+        chart_confidence_score=chart_score,
+        chart_confidence_grade=_grade(chart_score),
+        today_score=today_score,
+        today_grade=_grade(today_score),
+        check_price=check_price,
+        invalidation_price=invalidation_price,
+        why_today=why_today,
+        why_not_yet=why_not_yet,
     )
 
 
@@ -206,6 +473,8 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
     change_percent = metrics["change_percent"]
     recent_high = metrics["recent_high"]
     recent_low = metrics["recent_low"]
+    ma20 = metrics["ma20"]
+    ma50 = metrics["ma50"]
     news_score, news_labels = _news_bias(news_items)
     reclaim = max(close * 1.03, recent_high * 0.98)
     stop = min(close * 0.95, recent_low * 0.995)
@@ -213,6 +482,15 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
         stop = close * 0.95
     raw_score = -(sector_quote.change_percent * 2 + change_percent + news_score)
     score = _score_100(raw_score)
+    chart_score = _chart_confidence(metrics, sector_quote)
+    today_score = _today_attractiveness(metrics, sector_quote, news_score)
+    setup_type = "관망형"
+    judgement = "비선호 후보"
+    why_today = (
+        f"{sector_quote.name} 섹터가 약하거나 종목 흐름이 약해 신규매수보다 회복 확인이 우선입니다. "
+        f"20일선 거리 {_distance_text(metrics['ma20_distance_percent'])}, 거래량 {_ratio_text(metrics['volume_ratio'])}입니다."
+    )
+    why_not_yet = f"{_money(reclaim)} 회복 전에는 약세 흐름이 끝났다고 보기 어렵습니다."
     sector_name = SECTOR_KO.get(sector_quote.name, sector_quote.name)
     reasons = _score_reasons(
         sector_quote,
@@ -238,8 +516,27 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
         stop_price=stop,
         buy_point=f"신규매수 보류. 최소 {_money(reclaim)} 회복 후 재검토",
         stop_point=f"보유 중이면 {_money(stop)} 종가 이탈 시 손절 또는 비중 축소",
-        buy_basis=f"{sector_name} 섹터가 {format_change(sector_quote.change_percent)}로 약하고 {symbol}도 당일 {format_change(change_percent)} 흐름입니다. 관련 뉴스 축은 {news_labels}입니다.",
-        stop_basis=f"최근 저점권({_money(recent_low)})이 다시 깨지면 반등 실패와 추가 매도 압력이 확인됩니다.",
+        buy_basis=why_today,
+        stop_basis=why_not_yet,
+        setup_type=setup_type,
+        judgement=judgement,
+        ma20=ma20,
+        ma50=ma50,
+        ma20_distance_percent=metrics["ma20_distance_percent"],
+        ma50_distance_percent=metrics["ma50_distance_percent"],
+        ma20_slope_percent=metrics["ma20_slope_percent"],
+        ma50_slope_percent=metrics["ma50_slope_percent"],
+        volume_ratio=metrics["volume_ratio"],
+        volume_ratio_3d=metrics["volume_ratio_3d"],
+        volume_status=metrics["volume_status"],
+        chart_confidence_score=chart_score,
+        chart_confidence_grade=_grade(chart_score),
+        today_score=today_score,
+        today_grade=_grade(today_score),
+        check_price=reclaim,
+        invalidation_price=stop,
+        why_today=why_today,
+        why_not_yet=why_not_yet,
     )
 
 
@@ -247,14 +544,45 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
     if not plans:
         return f"{title}\n데이터 부족으로 후보를 만들지 못했습니다."
     lines = [title]
+    lines.extend(
+        [
+            "|종목|유형|판단|현재가|20일선/거리|50일선|거래량|차트 신뢰도|오늘 매력도|확인 가격|무효화 가격|",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
+    )
+    for plan in plans:
+        lines.append(
+            "|"
+            + "|".join(
+                [
+                    f"{plan.name}({plan.symbol})",
+                    plan.setup_type,
+                    plan.judgement,
+                    f"{_money(plan.close)} {format_change(plan.change_percent)}",
+                    f"{_price_text(plan.ma20)} / {_distance_text(plan.ma20_distance_percent)}",
+                    _price_text(plan.ma50),
+                    f"{plan.volume_status} {_ratio_text(plan.volume_ratio)}",
+                    f"{plan.chart_confidence_grade}({plan.chart_confidence_score})",
+                    f"{plan.today_grade}({plan.today_score})",
+                    _money(plan.check_price),
+                    _money(plan.invalidation_price),
+                ]
+            )
+            + "|"
+        )
     for index, plan in enumerate(plans, start=1):
         lines.extend([
-            f"{index}. {plan.name}({plan.symbol}) / {plan.sector} / 점수 {plan.score}/100({plan.grade}) / 종가 {_money(plan.close)}({format_change(plan.change_percent)})",
-            f"   점수 이유: {', '.join(plan.score_reasons)}",
+            f"{index}. {plan.name}({plan.symbol}) / {plan.sector} / 유형 {plan.setup_type} / 판단 {plan.judgement} / 점수 {plan.score}/100({plan.grade})",
+            f"   20일선: {_price_text(plan.ma20)} / 거리 {_distance_text(plan.ma20_distance_percent)} / 50일선: {_price_text(plan.ma50)} / 거래량: {plan.volume_status}({_ratio_text(plan.volume_ratio)})",
+            f"   차트 신뢰도: {plan.chart_confidence_grade}({plan.chart_confidence_score}/100) / 오늘 매력도: {plan.today_grade}({plan.today_score}/100)",
+            f"   확인 가격: {_money(plan.check_price)} / 무효화 가격: {_money(plan.invalidation_price)}",
+            f"   오늘 봐야 하는 이유: {plan.why_today}",
+            f"   아직 사면 안 되는 이유: {plan.why_not_yet}",
             f"   매수 타점: {plan.buy_point}",
             f"   손절 타점: {plan.stop_point}",
             f"   매수 근거: {plan.buy_basis}",
             f"   손절 근거: {plan.stop_basis}",
+            f"   점수 이유: {', '.join(plan.score_reasons)}",
         ])
     return "\n".join(lines)
 
@@ -273,6 +601,20 @@ def _plan_signal(plan: StockPlan, target_date: date) -> dict[str, Any]:
         "entry_price": round(plan.entry_price, 4),
         "support_price": round(plan.support_price, 4),
         "stop_price": round(plan.stop_price, 4),
+        "setup_type": plan.setup_type,
+        "judgement": plan.judgement,
+        "ma20": round(plan.ma20, 4) if plan.ma20 is not None else None,
+        "ma50": round(plan.ma50, 4) if plan.ma50 is not None else None,
+        "ma20_distance_percent": round(plan.ma20_distance_percent, 4) if plan.ma20_distance_percent is not None else None,
+        "ma50_distance_percent": round(plan.ma50_distance_percent, 4) if plan.ma50_distance_percent is not None else None,
+        "volume_ratio": round(plan.volume_ratio, 4) if plan.volume_ratio is not None else None,
+        "volume_status": plan.volume_status,
+        "chart_confidence_score": plan.chart_confidence_score,
+        "chart_confidence_grade": plan.chart_confidence_grade,
+        "today_score": plan.today_score,
+        "today_grade": plan.today_grade,
+        "check_price": round(plan.check_price, 4),
+        "invalidation_price": round(plan.invalidation_price, 4),
     }
 
 

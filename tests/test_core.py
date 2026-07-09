@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -54,6 +54,7 @@ from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
 from market_briefing_bot.watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
 from market_briefing_bot.investment_plan import (
+    _interest_plan,
     build_investment_package,
     build_investment_report,
     build_previous_signal_review,
@@ -558,6 +559,44 @@ class SectorReasonTests(unittest.TestCase):
 
 
 class InvestmentPlanTests(unittest.TestCase):
+    def _ohlcv_rows(
+        self,
+        *,
+        last_close: float = 100.0,
+        last_volume: float = 1400.0,
+        include_volume: bool = True,
+    ) -> list[dict]:
+        start = date(2026, 4, 10)
+        closes = [88.0 + index * 0.2 for index in range(40)] + [98.0] * 19 + [last_close]
+        rows = []
+        for index, close in enumerate(closes):
+            volume = 1000.0
+            if index == len(closes) - 1:
+                volume = last_volume
+            row = {
+                "date": start + timedelta(days=index),
+                "open": close * 0.995,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+            }
+            if include_volume:
+                row["volume"] = volume
+            rows.append(row)
+        return rows
+
+    def _interest_for_rows(self, rows: list[dict]):
+        snapshot = MarketSnapshot(
+            target_date=rows[-1]["date"],
+            index_quotes={"S&P 500": Quote("S&P 500", "SPY", rows[-1]["date"], 100, 99, 1.0, "test")},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sector = Quote("Technology", "XLK", rows[-1]["date"], 100, 98, 2.0, "test")
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            return _interest_plan("AMD", "AMD", sector, snapshot, [])
+
     def test_investment_report_contains_entry_stop_and_rationale(self) -> None:
         snapshot = MarketSnapshot(
             target_date=date(2026, 7, 2),
@@ -598,6 +637,48 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("매수 근거", report)
         self.assertIn("손절 근거", report)
         self.assertIn("점수", report)
+
+    def test_near_20_day_average_with_volume_becomes_priority_candidate(self) -> None:
+        plan = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=1400.0))
+
+        self.assertEqual(plan.setup_type, "20일선 지지 확인형")
+        self.assertEqual(plan.judgement, "오늘 확인 후보")
+        self.assertIsNotNone(plan.ma20_distance_percent)
+        self.assertLess(abs(plan.ma20_distance_percent or 0), 5)
+        self.assertIsNotNone(plan.volume_ratio)
+        self.assertGreaterEqual(plan.volume_ratio or 0, 1.2)
+
+    def test_far_above_20_day_average_is_chase_risk(self) -> None:
+        plan = self._interest_for_rows(self._ohlcv_rows(last_close=115.0, last_volume=1800.0))
+
+        self.assertEqual(plan.setup_type, "추격 위험형")
+        self.assertEqual(plan.judgement, "신규 진입 관망")
+        self.assertEqual(plan.today_grade, "C")
+
+    def test_low_volume_reduces_candidate_quality(self) -> None:
+        strong = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=1400.0))
+        weak = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=500.0))
+
+        self.assertEqual(weak.volume_status, "거래량 부족")
+        self.assertLess(weak.today_score, strong.today_score)
+
+    def test_breaking_below_20_day_average_is_wait_and_see(self) -> None:
+        plan = self._interest_for_rows(self._ohlcv_rows(last_close=94.0, last_volume=1200.0))
+
+        self.assertEqual(plan.setup_type, "관망형")
+        self.assertIn("20일선", plan.judgement)
+
+    def test_close_only_rows_show_volume_check_needed(self) -> None:
+        rows = self._ohlcv_rows(last_close=100.0, include_volume=False)
+        for row in rows:
+            row.pop("open", None)
+            row.pop("high", None)
+            row.pop("low", None)
+        plan = self._interest_for_rows(rows)
+
+        self.assertEqual(plan.volume_status, "거래량 확인 필요")
+        self.assertEqual(plan.setup_type, "거래량 부족형")
+        self.assertEqual(plan.chart_confidence_grade, "C")
 
     def test_investment_package_exposes_signals_for_next_day_tracking(self) -> None:
         snapshot = MarketSnapshot(
@@ -744,6 +825,18 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("Action report", rendered)
         self.assertNotIn("뉴스 1/5", rendered)
         self.assertNotIn("<pre", rendered)
+
+    def test_markdown_table_renders_as_html_table(self) -> None:
+        rendered = _render_report_sections(
+            "투자 후보\n"
+            "|종목|유형|거래량|\n"
+            "|---|---|---|\n"
+            "|AMD|20일선 지지 확인형|1.30배|"
+        )
+
+        self.assertIn('class="report-table"', rendered)
+        self.assertIn("<th>종목</th>", rendered)
+        self.assertIn("<td>AMD</td>", rendered)
 
     def test_importance_badge_class_maps_a_b_c(self) -> None:
         self.assertEqual(_importance_badge_class("A급"), "importance-a")

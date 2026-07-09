@@ -13,7 +13,7 @@ from .timezones import get_timezone
 
 
 STOOQ_DAILY_URL = "https://stooq.com/q/d/l/?s={symbol}&i=d"
-YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1mo&interval=1d"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1y&interval=1d"
 STOOQ_SYMBOL_OVERRIDES = {
     "^GSPC": "spy.us",
     "^IXIC": "qqq.us",
@@ -119,12 +119,20 @@ def fetch_stooq_daily(symbol: str) -> List[dict]:
         if not row.get("Date") or row.get("Close") in (None, "", "N/D"):
             continue
         try:
-            rows.append(
-                {
-                    "date": date.fromisoformat(row["Date"]),
-                    "close": float(row["Close"]),
-                }
-            )
+            item = {
+                "date": date.fromisoformat(row["Date"]),
+                "close": float(row["Close"]),
+            }
+            for csv_key, item_key in (
+                ("Open", "open"),
+                ("High", "high"),
+                ("Low", "low"),
+                ("Volume", "volume"),
+            ):
+                value = row.get(csv_key)
+                if value not in (None, "", "N/D"):
+                    item[item_key] = float(value)
+            rows.append(item)
         except ValueError:
             continue
     if len(rows) < 2:
@@ -143,21 +151,31 @@ def fetch_yahoo_daily(symbol: str) -> List[dict]:
         raise RuntimeError(f"{symbol} Yahoo 데이터 오류: {error}")
 
     timestamps = result.get("timestamp") or []
-    closes = (
-        result.get("indicators", {})
-        .get("quote", [{}])[0]
-        .get("close", [])
-    )
+    quote = result.get("indicators", {}).get("quote", [{}])[0]
+    opens = quote.get("open", [])
+    highs = quote.get("high", [])
+    lows = quote.get("low", [])
+    closes = quote.get("close", [])
+    volumes = quote.get("volume", [])
     exchange_tz_name = result.get("meta", {}).get("exchangeTimezoneName", "America/New_York")
     exchange_tz = get_timezone(exchange_tz_name)
     rows = []
-    for timestamp, close in zip(timestamps, closes):
+    for index, (timestamp, close) in enumerate(zip(timestamps, closes)):
         if close is None:
             continue
         trading_date = datetime.fromtimestamp(timestamp, timezone.utc).astimezone(
             exchange_tz
         ).date()
-        rows.append({"date": trading_date, "close": float(close)})
+        item = {"date": trading_date, "close": float(close)}
+        for values, key in (
+            (opens, "open"),
+            (highs, "high"),
+            (lows, "low"),
+            (volumes, "volume"),
+        ):
+            if index < len(values) and values[index] is not None:
+                item[key] = float(values[index])
+        rows.append(item)
     if len(rows) < 2:
         raise RuntimeError(f"{symbol} Yahoo 데이터를 충분히 가져오지 못했습니다.")
     rows.sort(key=lambda item: item["date"])
