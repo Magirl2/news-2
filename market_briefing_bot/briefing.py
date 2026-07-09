@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -306,6 +307,85 @@ def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[Ne
     )
 
 
+def _sentiment_points(sentiment: str) -> int:
+    if sentiment == "긍정":
+        return 2
+    if sentiment == "중립+":
+        return 1
+    if sentiment == "중립-":
+        return -1
+    if sentiment == "부정":
+        return -2
+    return 0
+
+
+def _importance_points(importance: str) -> int:
+    if importance.startswith("A"):
+        return 3
+    if importance.startswith("B"):
+        return 2
+    return 1
+
+
+def _ranked_news_items(news_items: list[NewsItem]) -> list[NewsItem]:
+    return sorted(
+        news_items,
+        key=lambda item: (
+            _importance_points(korean_news_importance(item)[0]),
+            abs(_sentiment_points(korean_news_sentiment(item)[0])),
+            item.score,
+        ),
+        reverse=True,
+    )
+
+
+def _news_market_read(news_items: list[NewsItem]) -> tuple[str, str]:
+    if not news_items:
+        return "뉴스 부족", "뉴스 피드가 부족해 가격과 섹터맵을 더 신뢰해야 합니다."
+
+    score = sum(_sentiment_points(korean_news_sentiment(item)[0]) for item in news_items)
+    a_count = sum(1 for item in news_items if korean_news_importance(item)[0].startswith("A"))
+    if score >= 3 and a_count >= 1:
+        return "우호적", "주도 테마가 가격으로 확인되면 관심 후보를 우선 검토합니다."
+    if score <= -2:
+        return "경계", "좋은 뉴스보다 리스크가 크므로 신규 추격보다 방어와 손절 기준을 먼저 봅니다."
+    return "혼재", "뉴스 방향이 갈리므로 지수보다 섹터와 종목별 상대강도를 기준으로 판단합니다."
+
+
+def _news_dashboard(snapshot: MarketSnapshot, news_items: list[NewsItem]) -> str:
+    ranked_items = _ranked_news_items(news_items)
+    read, action = _news_market_read(news_items)
+    label_counts = Counter(korean_news_label(item) for item in news_items)
+    importance_counts = Counter(korean_news_importance(item)[0] for item in news_items)
+    main_themes = ", ".join(label for label, _count in label_counts.most_common(3)) or "확인 불가"
+    top_lines = [
+        f"{index}. [{korean_news_label(item)}] {korean_news_headline(item)}"
+        for index, item in enumerate(ranked_items[:3], start=1)
+    ]
+    if not top_lines:
+        top_lines = ["1. 주요 뉴스 없음"]
+
+    regime, _regime_action = _risk_regime(snapshot)
+    invalidation = "확인 불가"
+    if read == "우호적":
+        invalidation = "A급 뉴스가 좋아도 관련 ETF가 약하거나 VIX가 급등하면 추격 매수 관점을 낮춥니다."
+    elif read == "경계":
+        invalidation = "부정 뉴스에도 지수가 버티고 강세 섹터가 확산되면 방어 일변도 관점을 완화합니다."
+    elif read == "혼재":
+        invalidation = "혼재 장세에서는 한쪽 방향으로 베팅하기보다 강한 섹터가 2일 이상 이어지는지 확인합니다."
+
+    return (
+        "뉴스 종합판\n"
+        f"뉴스 기류: {read}\n"
+        f"시장 모드와 조합: {regime}\n"
+        f"A급/B급/C급: {importance_counts.get('A급', 0)} / {importance_counts.get('B급', 0)} / {importance_counts.get('C급', 0)}\n"
+        f"핵심 테마: {main_themes}\n"
+        f"먼저 읽을 뉴스:\n" + "\n".join(f"- {line}" for line in top_lines) + "\n"
+        f"오늘 행동: {action}\n"
+        f"무효화 조건: {invalidation}"
+    )
+
+
 def _shorten(text: str, max_chars: int) -> str:
     text = " ".join(text.split())
     if len(text) <= max_chars:
@@ -427,6 +507,51 @@ def _format_news(items: list[NewsItem], snapshot: MarketSnapshot) -> list[str]:
     return cards
 
 
+def _news_dashboard_html(snapshot: MarketSnapshot, news_items: list[NewsItem]) -> str:
+    ranked_items = _ranked_news_items(news_items)
+    read, action = _news_market_read(news_items)
+    label_counts = Counter(korean_news_label(item) for item in news_items)
+    importance_counts = Counter(korean_news_importance(item)[0] for item in news_items)
+    main_themes = ", ".join(label for label, _count in label_counts.most_common(3)) or "확인 불가"
+    regime, _regime_action = _risk_regime(snapshot)
+    top_items = "".join(
+        f"<li><b>{index}. {html.escape(korean_news_label(item))}</b> {html.escape(korean_news_headline(item))}</li>"
+        for index, item in enumerate(ranked_items[:3], start=1)
+    )
+    if not top_items:
+        top_items = "<li>주요 뉴스 없음</li>"
+
+    if read == "우호적":
+        invalidation = "관련 ETF가 약하거나 VIX가 급등하면 추격 매수 관점을 낮춥니다."
+        read_class = "read-positive"
+    elif read == "경계":
+        invalidation = "부정 뉴스에도 지수가 버티고 강세 섹터가 확산되면 방어 일변도 관점을 완화합니다."
+        read_class = "read-negative"
+    else:
+        invalidation = "강한 섹터가 2일 이상 이어지는지 확인하기 전까지 선별 접근합니다."
+        read_class = "read-mixed"
+
+    return f"""
+    <section class="news-dashboard">
+      <div class="dashboard-head">
+        <span class="read-badge {read_class}">{html.escape(read)}</span>
+        <div>
+          <h2>뉴스 종합판</h2>
+          <p>개별 뉴스를 읽기 전, 오늘 뉴스가 시장을 어느 쪽으로 밀고 있는지 먼저 보는 영역입니다.</p>
+        </div>
+      </div>
+      <div class="dashboard-grid">
+        <div><b>시장 조합</b><span>{html.escape(regime)}</span></div>
+        <div><b>A/B/C급</b><span>{importance_counts.get('A급', 0)} / {importance_counts.get('B급', 0)} / {importance_counts.get('C급', 0)}</span></div>
+        <div><b>핵심 테마</b><span>{html.escape(main_themes)}</span></div>
+      </div>
+      <div class="dashboard-action"><b>오늘 행동</b><span>{html.escape(action)}</span></div>
+      <div class="dashboard-action"><b>무효화 조건</b><span>{html.escape(invalidation)}</span></div>
+      <div class="priority-news"><b>먼저 읽을 뉴스</b><ol>{top_items}</ol></div>
+    </section>
+    """
+
+
 def _today_checklist(snapshot: MarketSnapshot, news_items: list[NewsItem]) -> str:
     sectors = sorted(
         snapshot.sector_quotes.values(), key=lambda quote: quote.change_percent, reverse=True
@@ -488,7 +613,12 @@ def _render_report_sections(text: str) -> str:
             continue
         body = _render_report_body_lines(lines[1:])
         class_name = "report-section"
-        if "오늘의 결론" in title or "전문 투자자 체크" in title or "오늘 매매 가능 점수" in title:
+        if (
+            "오늘의 결론" in title
+            or "전문 투자자 체크" in title
+            or "오늘 매매 가능 점수" in title
+            or "뉴스 종합판" in title
+        ):
             class_name += " report-decision"
         elif "이벤트" in title or "SEC 공시" in title or "실적 발표" in title:
             class_name += " report-event"
@@ -582,6 +712,7 @@ def _write_html_report(
     market_line = first_lines[1] if len(first_lines) > 1 else ""
     one_line = first_lines[2] if len(first_lines) > 2 else ""
     rendered_sections = _render_report_sections(text)
+    news_dashboard = _news_dashboard_html(snapshot, news_items)
     html_text = f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -614,6 +745,22 @@ def _write_html_report(
     .sector-change {{ font-size: 24px; font-weight: 700; margin-bottom: 10px; }}
     .bar {{ height: 8px; background: #edf0f5; border-radius: 999px; overflow: hidden; }}
     .bar span {{ display: block; height: 100%; border-radius: 999px; }}
+    .news-dashboard {{ margin-top: 20px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }}
+    .dashboard-head {{ display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }}
+    .dashboard-head h2 {{ margin: 0 0 5px; }}
+    .dashboard-head p {{ margin: 0; color: var(--muted); line-height: 1.5; }}
+    .read-badge {{ flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 28px; padding: 5px 12px; border-radius: 999px; font-weight: 800; font-size: 13px; }}
+    .read-positive {{ color: #067647; background: #ecfdf3; border: 1px solid #abefc6; }}
+    .read-negative {{ color: #b42318; background: #fff1f3; border: 1px solid #fecdca; }}
+    .read-mixed {{ color: #b54708; background: #fffaeb; border: 1px solid #fedf89; }}
+    .dashboard-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }}
+    .dashboard-grid div, .dashboard-action, .priority-news {{ background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 8px; padding: 12px; }}
+    .dashboard-grid b, .dashboard-action b, .priority-news b {{ display: block; color: #1d2939; margin-bottom: 5px; }}
+    .dashboard-grid span, .dashboard-action span {{ color: #344054; line-height: 1.5; }}
+    .dashboard-action {{ margin-top: 8px; }}
+    .priority-news {{ margin-top: 8px; }}
+    .priority-news ol {{ margin: 8px 0 0; padding-left: 20px; }}
+    .priority-news li {{ margin: 6px 0; line-height: 1.5; }}
     .news-list {{ display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0; padding: 0; list-style: none; }}
     .news-list li {{ border: 1px solid #e1e5ec; border-radius: 8px; padding: 16px; background: #fff; line-height: 1.55; }}
     .news-list strong {{ display: block; margin-bottom: 8px; font-size: 17px; }}
@@ -649,6 +796,8 @@ def _write_html_report(
     @media (max-width: 680px) {{
       main {{ padding: 18px 12px 44px; }}
       .hero, .report-section {{ padding: 18px; }}
+      .dashboard-head {{ display: block; }}
+      .read-badge {{ margin-bottom: 10px; }}
       .market-line {{ font-size: 16px; }}
     }}
   </style>
@@ -663,6 +812,7 @@ def _write_html_report(
     </header>
     <h2>섹터맵</h2>
     <div class="grid">{''.join(sector_cards)}</div>
+    {news_dashboard}
     <h2>주요 뉴스 분석</h2>
     <ol class="news-list">{''.join(news_cards)}</ol>
     <h2>상세 보고서</h2>
@@ -724,6 +874,7 @@ def build_briefing(config: Config) -> Briefing:
             f"한줄: {_one_line(snapshot)}"
         ),
         _today_decision(snapshot, sectors, news_items),
+        _news_dashboard(snapshot, news_items),
         professional_text,
         (
             "섹터맵\n"

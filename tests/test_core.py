@@ -9,6 +9,7 @@ from unittest.mock import patch
 from market_briefing_bot.briefing import (
     _importance_badge_class,
     _news_card,
+    _news_dashboard,
     _news_price_reaction,
     _render_report_sections,
     _sector_driver,
@@ -693,6 +694,44 @@ class NewsDecisionQualityTests(unittest.TestCase):
         self.assertIn("긍정 시나리오:", card)
         self.assertIn("부정 시나리오:", card)
         self.assertIn("확인 신호:", card)
+
+    def test_news_dashboard_summarizes_overall_news_read(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", date(2026, 7, 7), 100, 99, 1.0, "test")
+            },
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        items = [
+            NewsItem(
+                title="Nvidia chip demand remains strong as AI semiconductor spending grows",
+                description="AI chip suppliers see demand.",
+                link="https://example.com/1",
+                source="Example",
+                published="",
+                score=8,
+            ),
+            NewsItem(
+                title="Fed rate path remains uncertain as inflation data looms",
+                description="Treasury yields move higher.",
+                link="https://example.com/2",
+                source="Example",
+                published="",
+                score=7,
+            ),
+        ]
+
+        dashboard = _news_dashboard(snapshot, items)
+
+        self.assertIn("뉴스 종합판", dashboard)
+        self.assertIn("뉴스 기류:", dashboard)
+        self.assertIn("A급/B급/C급:", dashboard)
+        self.assertIn("먼저 읽을 뉴스:", dashboard)
+        self.assertIn("오늘 행동:", dashboard)
+        self.assertIn("무효화 조건:", dashboard)
 
 
 class EventCalendarTests(unittest.TestCase):
