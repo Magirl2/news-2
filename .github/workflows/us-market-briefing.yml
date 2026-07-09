@@ -78,7 +78,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: Send Kakao briefing
-        run: python -m market_briefing_bot send
+        run: python -m market_briefing_bot send-built
 
       - name: Upload report artifacts
         if: always()

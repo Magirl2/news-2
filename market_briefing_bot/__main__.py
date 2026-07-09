@@ -9,8 +9,8 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
-from .briefing import build_briefing
-from .config import ENV_FILE, LOGS_DIR, SEND_STATE_FILE, TOKEN_FILE, ensure_project_dirs, load_config
+from .briefing import Briefing, build_briefing
+from .config import ENV_FILE, LOGS_DIR, REPORTS_DIR, SEND_STATE_FILE, TOKEN_FILE, ensure_project_dirs, load_config
 from .kakao import KakaoClient, KakaoError, build_auth_url, exchange_code, run_local_login
 from .market_calendar import current_market_note, last_completed_trading_day
 
@@ -222,6 +222,21 @@ def _kakao_delivery_text(config, briefing) -> str:
     return "\n".join([title, "전체 보고서:", report_url])
 
 
+def _latest_built_briefing() -> Briefing | None:
+    html_reports = sorted(REPORTS_DIR.glob("*_briefing.html"))
+    if not html_reports:
+        return None
+
+    html_path = html_reports[-1]
+    report_path = html_path.with_suffix(".md")
+    if report_path.exists():
+        text = report_path.read_text(encoding="utf-8")
+    else:
+        target_date = html_path.stem.replace("_briefing", "")
+        text = f"미국장 마감 {target_date}\n전체 보고서는 아래 링크에서 확인하세요."
+    return Briefing(text=text, report_path=report_path, html_path=html_path, sources=[], warnings=[])
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     config = load_config()
     briefing = build_briefing(config)
@@ -261,6 +276,41 @@ def cmd_send(args: argparse.Namespace) -> int:
                     "미국장 브리핑 봇 실행 중 오류가 났습니다.\n"
                     f"원인: {exc}\n"
                     "자세한 내용은 logs\\bot.log 파일을 확인해 주세요."
+                )
+            except Exception:
+                logging.exception("Failed to send Kakao failure alert")
+        raise
+
+
+def cmd_send_built(args: argparse.Namespace) -> int:
+    config = load_config()
+    briefing = _latest_built_briefing()
+    if briefing is None:
+        print("보낼 보고서가 없습니다. 먼저 preview 명령으로 보고서를 만들어 주세요.")
+        return 2
+
+    target_date = briefing.html_path.stem.replace("_briefing", "")
+    try:
+        if not _has_kakao_token():
+            _print_next_steps_for_kakao()
+            print(f"이미 만들어진 보고서: {briefing.html_path}")
+            logging.warning("Kakao token file is missing. Built report was not sent.")
+            return 2
+        sent_count = KakaoClient(config).send_text(_kakao_delivery_text(config, briefing))
+        _mark_send_success(target_date, sent_count, str(briefing.report_path), str(briefing.html_path))
+        logging.info("Built report sent to KakaoTalk in %s chunks: %s", sent_count, briefing.html_path)
+        print(f"카카오톡으로 {sent_count}개 메시지를 보냈습니다.")
+        print(f"HTML 보고서: {briefing.html_path}")
+        return 0
+    except Exception as exc:
+        _mark_send_failure(target_date, exc)
+        logging.exception("Built daily briefing send failed")
+        if _has_kakao_token():
+            try:
+                KakaoClient(config).send_text(
+                    "미국장 브리핑 발송 중 오류가 났습니다.\n"
+                    f"원인: {exc}\n"
+                    "GitHub Actions 로그를 확인해 주세요."
                 )
             except Exception:
                 logging.exception("Failed to send Kakao failure alert")
@@ -489,6 +539,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     send = subparsers.add_parser("send", help="보고서를 만들고 카카오톡으로 보내기")
     send.set_defaults(func=cmd_send)
+
+    send_built = subparsers.add_parser("send-built", help="이미 만들어진 최신 보고서를 카카오톡으로 보내기")
+    send_built.set_defaults(func=cmd_send_built)
 
     send_once = subparsers.add_parser("send-once", help="자동 실행용: 같은 미국장 기준일은 한 번만 보내기")
     send_once.set_defaults(func=cmd_send_once)

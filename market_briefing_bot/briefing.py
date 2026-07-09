@@ -319,6 +319,14 @@ def _source_name(source: str) -> str:
     return _shorten(source, 14)
 
 
+def _importance_badge_class(importance: str) -> str:
+    if importance.startswith("A"):
+        return "importance-a"
+    if importance.startswith("B"):
+        return "importance-b"
+    return "importance-c"
+
+
 def _first_checkpoint(item: NewsItem) -> str:
     checkpoints = korean_news_checkpoints(item)
     return checkpoints[0] if checkpoints else "다음 거래일 가격과 거래량 반응 확인"
@@ -529,11 +537,12 @@ def _write_html_report(
     news_cards = []
     for item in news_items[:5]:
         importance, importance_reason = korean_news_importance(item)
+        importance_class = _importance_badge_class(importance)
         news_cards.append(
             f"""
             <li>
               <strong>{html.escape(korean_news_label(item))}: {html.escape(korean_news_headline(item))}</strong>
-              <span>중요도: {html.escape(importance)} - {html.escape(importance_reason)}</span>
+              <span class="importance-line">중요도 <b class="importance-badge {importance_class}">{html.escape(importance)}</b> {html.escape(importance_reason)}</span>
               <span>{html.escape(korean_news_summary(item))}</span>
               <span>가격반응: {html.escape(_news_price_reaction(item, snapshot))}</span>
               <span>체크: {html.escape(' / '.join(korean_news_checkpoints(item)))}</span>
@@ -585,6 +594,11 @@ def _write_html_report(
     .news-list li {{ border: 1px solid #e1e5ec; border-radius: 8px; padding: 16px; background: #fff; line-height: 1.55; }}
     .news-list strong {{ display: block; margin-bottom: 8px; font-size: 17px; }}
     .news-list span {{ display: block; margin: 5px 0; color: #344054; }}
+    .news-list .importance-line {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #1d2939; }}
+    .importance-badge {{ display: inline-flex; align-items: center; min-height: 22px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 800; line-height: 1; }}
+    .importance-a {{ color: #b42318; background: #fff1f3; border-color: #fecdca; }}
+    .importance-b {{ color: #b54708; background: #fffaeb; border-color: #fedf89; }}
+    .importance-c {{ color: #175cd3; background: #eff8ff; border-color: #b2ddff; }}
     a {{ color: var(--blue); text-decoration: none; font-weight: 700; }}
     .report-flow {{ display: grid; gap: 0; }}
     .report-section {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 22px; margin-top: 16px; line-height: 1.65; }}

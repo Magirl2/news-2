@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from market_briefing_bot.briefing import _news_price_reaction, _render_report_sections, _sector_driver
+from market_briefing_bot.briefing import (
+    _importance_badge_class,
+    _news_price_reaction,
+    _render_report_sections,
+    _sector_driver,
+)
 from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
     early_close_reason,
     holiday_reason,
     is_trading_day,
+    last_completed_trading_day,
     previous_trading_day,
 )
 from market_briefing_bot.market_data import MarketSnapshot, Quote
@@ -39,6 +45,7 @@ from market_briefing_bot.__main__ import (
     _already_sent,
     _build_github_secrets_text,
     _kakao_delivery_text,
+    _latest_built_briefing,
     _mark_send_success,
     _next_setup_step,
 )
@@ -55,6 +62,10 @@ class MarketCalendarTests(unittest.TestCase):
 
     def test_previous_trading_day_skips_weekend(self) -> None:
         self.assertEqual(previous_trading_day(date(2026, 6, 29)), date(2026, 6, 26))
+
+    def test_after_market_close_uses_same_trading_day(self) -> None:
+        run_time = datetime(2026, 7, 8, 23, 18, tzinfo=timezone.utc)
+        self.assertEqual(last_completed_trading_day(run_time), date(2026, 7, 8))
 
 
 class KakaoMessageTests(unittest.TestCase):
@@ -441,6 +452,23 @@ class KakaoDeliveryTextTests(unittest.TestCase):
         self.assertIn("https://example.github.io/news-2/reports/2026-07-07_briefing.html", text)
         self.assertLessEqual(len(text), 200)
 
+    def test_latest_built_briefing_uses_newest_html_report(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            reports_dir = Path(temp_dir)
+            (reports_dir / "2026-07-07_briefing.html").write_text("<html>old</html>", encoding="utf-8")
+            (reports_dir / "2026-07-08_briefing.html").write_text("<html>new</html>", encoding="utf-8")
+            (reports_dir / "2026-07-08_briefing.md").write_text(
+                "미국장 마감 2026-07-08\n본문", encoding="utf-8"
+            )
+
+            with patch("market_briefing_bot.__main__.REPORTS_DIR", reports_dir):
+                briefing = _latest_built_briefing()
+
+        self.assertIsNotNone(briefing)
+        assert briefing is not None
+        self.assertEqual(briefing.html_path.name, "2026-07-08_briefing.html")
+        self.assertIn("2026-07-08", briefing.text)
+
 
 class HtmlReportTests(unittest.TestCase):
     def test_report_sections_are_not_rendered_as_raw_message_pre(self) -> None:
@@ -451,6 +479,11 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("Action report", rendered)
         self.assertNotIn("뉴스 1/5", rendered)
         self.assertNotIn("<pre", rendered)
+
+    def test_importance_badge_class_maps_a_b_c(self) -> None:
+        self.assertEqual(_importance_badge_class("A급"), "importance-a")
+        self.assertEqual(_importance_badge_class("B급"), "importance-b")
+        self.assertEqual(_importance_badge_class("C급"), "importance-c")
 
 
 class WatchlistTests(unittest.TestCase):
