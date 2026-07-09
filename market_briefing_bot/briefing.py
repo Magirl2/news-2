@@ -939,6 +939,16 @@ def _today_checklist(snapshot: MarketSnapshot, news_items: list[NewsItem]) -> st
     )
 
 
+def _warnings_block(warnings: list[str], limit: int = 6) -> str:
+    visible = warnings[:limit]
+    extra_count = max(0, len(warnings) - len(visible))
+    lines = ["확인 필요"]
+    lines.extend(f"- {warning}" for warning in visible)
+    if extra_count:
+        lines.append(f"- 외 {extra_count}개 경고가 더 있습니다. GitHub Actions 로그와 보고서 artifacts를 확인하세요.")
+    return "\n".join(lines)
+
+
 def _render_report_body_lines(lines: list[str]) -> str:
     html_parts: list[str] = []
     in_list = False
@@ -1367,7 +1377,7 @@ def build_briefing(config: Config) -> Briefing:
     ]
 
     if warnings:
-        blocks.append("확인 필요\n" + "\n".join(f"- {warning}" for warning in warnings[:3]))
+        blocks.append(_warnings_block(warnings))
 
     text = "\n\n".join(blocks)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)

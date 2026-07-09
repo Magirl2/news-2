@@ -20,6 +20,7 @@ from market_briefing_bot.briefing import (
     _sector_driver,
     _sector_score_report,
     _sector_scorecards,
+    _warnings_block,
 )
 from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
@@ -29,7 +30,7 @@ from market_briefing_bot.market_calendar import (
     last_completed_trading_day,
     previous_trading_day,
 )
-from market_briefing_bot.market_data import MarketSnapshot, Quote
+from market_briefing_bot.market_data import MarketSnapshot, Quote, _quote_from_candidates
 from market_briefing_bot.news import (
     NewsItem,
     fetch_top_news,
@@ -84,6 +85,32 @@ class MarketCalendarTests(unittest.TestCase):
     def test_after_market_close_uses_same_trading_day(self) -> None:
         run_time = datetime(2026, 7, 8, 23, 18, tzinfo=timezone.utc)
         self.assertEqual(last_completed_trading_day(run_time), date(2026, 7, 8))
+
+
+class MarketDataFallbackTests(unittest.TestCase):
+    def test_quote_uses_stooq_when_yahoo_fails(self) -> None:
+        warnings: list[str] = []
+        rows = [
+            {"date": date(2026, 7, 1), "close": 100.0},
+            {"date": date(2026, 7, 2), "close": 103.0},
+        ]
+        with (
+            patch("market_briefing_bot.market_data.fetch_yahoo_daily", side_effect=RuntimeError("Yahoo down")),
+            patch("market_briefing_bot.market_data.fetch_stooq_daily", return_value=rows),
+        ):
+            quote = _quote_from_candidates("Technology", ["XLK"], date(2026, 7, 2), warnings)
+
+        self.assertEqual(quote.source, "Stooq daily CSV")
+        self.assertEqual(quote.symbol, "xlk.us")
+        self.assertAlmostEqual(quote.change_percent, 3.0)
+        self.assertTrue(any("확인 필요" in warning and "Stooq" in warning for warning in warnings))
+
+    def test_warnings_block_keeps_more_than_three_items_visible(self) -> None:
+        text = _warnings_block([f"경고 {index}" for index in range(8)])
+
+        self.assertIn("경고 0", text)
+        self.assertIn("경고 5", text)
+        self.assertIn("외 2개", text)
 
 
 class KakaoMessageTests(unittest.TestCase):
@@ -299,6 +326,23 @@ class NewsSummaryTests(unittest.TestCase):
         self.assertLessEqual(labels.count("AI/반도체"), 1)
         self.assertIn("고용", labels)
         self.assertIn("방산", labels)
+
+    def test_top_news_warns_when_no_investable_items_selected(self) -> None:
+        feed_items = [
+            NewsItem(
+                title="Best personal loans for summer travel",
+                description="Consumer advice unrelated to market action.",
+                link="https://example.com/loan",
+                source="Example",
+                published="",
+                score=-100,
+            )
+        ]
+        with patch("market_briefing_bot.news.fetch_rss_feed", return_value=feed_items):
+            items, warnings = fetch_top_news(["https://example.com/rss"], max_items=5)
+
+        self.assertFalse(items)
+        self.assertTrue(any("확인 필요" in warning for warning in warnings))
 
 
 class AiNewsInterpretationTests(unittest.TestCase):

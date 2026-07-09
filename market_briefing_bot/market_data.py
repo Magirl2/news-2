@@ -14,6 +14,15 @@ from .timezones import get_timezone
 
 STOOQ_DAILY_URL = "https://stooq.com/q/d/l/?s={symbol}&i=d"
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1mo&interval=1d"
+STOOQ_SYMBOL_OVERRIDES = {
+    "^GSPC": "spy.us",
+    "^IXIC": "qqq.us",
+    "^DJI": "dia.us",
+    "SPY": "spy.us",
+    "QQQ": "qqq.us",
+    "DIA": "dia.us",
+    "^VIX": "^vix",
+}
 
 
 INDEX_SYMBOLS = {
@@ -155,6 +164,39 @@ def fetch_yahoo_daily(symbol: str) -> List[dict]:
     return rows
 
 
+def _stooq_symbol(symbol: str) -> str | None:
+    if symbol in STOOQ_SYMBOL_OVERRIDES:
+        return STOOQ_SYMBOL_OVERRIDES[symbol]
+    if symbol.isalpha():
+        return f"{symbol.lower()}.us"
+    return None
+
+
+def _daily_rows_from_sources(
+    symbol: str,
+    name: str,
+    warnings: List[str],
+) -> tuple[List[dict], str, str]:
+    errors: list[str] = []
+    try:
+        return fetch_yahoo_daily(symbol), symbol, "Yahoo Finance"
+    except Exception as exc:  # noqa: BLE001 - Stooq fallback keeps the briefing usable.
+        errors.append(f"Yahoo Finance {symbol}: {exc}")
+
+    stooq_symbol = _stooq_symbol(symbol)
+    if stooq_symbol:
+        try:
+            rows = fetch_stooq_daily(stooq_symbol)
+            warnings.append(
+                f"확인 필요: {name} Yahoo Finance 조회 실패로 Stooq 보조 데이터를 사용했습니다."
+            )
+            return rows, stooq_symbol, "Stooq daily CSV"
+        except Exception as exc:  # noqa: BLE001 - report the combined failure below.
+            errors.append(f"Stooq {stooq_symbol}: {exc}")
+
+    raise RuntimeError("; ".join(errors))
+
+
 def _pick_latest_row(rows: Sequence[dict], target_date: date) -> tuple[dict, dict]:
     eligible = [row for row in rows if row["date"] <= target_date]
     if len(eligible) < 2:
@@ -168,29 +210,29 @@ def _quote_from_candidates(
     last_error: Exception | None = None
     for symbol in symbols:
         try:
-            rows = fetch_yahoo_daily(symbol)
+            rows, used_symbol, source = _daily_rows_from_sources(symbol, name, warnings)
             current, previous = _pick_latest_row(rows, target_date)
             previous_close = previous["close"]
             close = current["close"]
             change_percent = ((close - previous_close) / previous_close) * 100
             if current["date"] < target_date:
                 warnings.append(
-                    f"{name} 최신 데이터가 기준일보다 늦게 반영될 수 있어 "
+                    f"확인 필요: {name} 최신 데이터가 기준일보다 늦게 반영되지 않아 "
                     f"{current['date']} 데이터를 사용했습니다."
                 )
             return Quote(
                 name=name,
-                symbol=symbol,
+                symbol=used_symbol,
                 trading_date=current["date"],
                 close=close,
                 previous_close=previous_close,
                 change_percent=change_percent,
-                source="Yahoo Finance",
+                source=source,
             )
         except Exception as exc:  # noqa: BLE001 - keep trying fallback symbols.
             last_error = exc
             continue
-    raise RuntimeError(f"{name} 데이터를 가져오지 못했습니다: {last_error}")
+    raise RuntimeError(f"확인 필요: {name} 데이터를 가져오지 못했습니다. {last_error}")
 
 
 def fetch_market_snapshot(target_date: date) -> MarketSnapshot:
@@ -209,13 +251,17 @@ def fetch_market_snapshot(target_date: date) -> MarketSnapshot:
             risk_quotes[name] = _quote_from_candidates(name, symbols, target_date, warnings)
         except Exception as exc:  # noqa: BLE001 - keep the briefing usable.
             warnings.append(f"{name} 위험지표를 가져오지 못했습니다: {exc}")
+    sources = {
+        quote.source
+        for quote in [*index_quotes.values(), *sector_quotes.values(), *risk_quotes.values()]
+    }
     return MarketSnapshot(
         target_date=target_date,
         index_quotes=index_quotes,
         sector_quotes=sector_quotes,
         risk_quotes=risk_quotes,
         warnings=warnings,
-        source="Yahoo Finance chart data",
+        source=" + ".join(sorted(sources)) if sources else "데이터 출처 확인 필요",
     )
 
 

@@ -255,6 +255,12 @@ def fetch_top_news(feed_urls: Iterable[str], max_items: int = 5) -> tuple[List[N
         selected.append(item)
         if len(selected) >= max_items:
             break
+    if not selected:
+        warnings.append("확인 필요: 주요 뉴스 RSS에서 투자 관련 뉴스를 충분히 찾지 못했습니다.")
+    elif len(selected) < max_items:
+        warnings.append(
+            f"확인 필요: 주요 뉴스가 {len(selected)}개만 선택되어 뉴스 해석 신뢰도가 낮을 수 있습니다."
+        )
     return selected, warnings
 
 
