@@ -17,6 +17,8 @@ from market_briefing_bot.briefing import (
     _quick_takeaways_text,
     _render_report_sections,
     _sector_driver,
+    _sector_score_report,
+    _sector_scorecards,
 )
 from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
@@ -356,6 +358,67 @@ class SectorReasonTests(unittest.TestCase):
             warnings=[],
         )
         self.assertIn("방어주 선호", _sector_driver("Utilities", -1.0, snapshot, []))
+
+    def test_sector_scorecards_use_price_news_rates_and_flow(self) -> None:
+        target = date(2026, 7, 7)
+        sectors = [
+            Quote("Technology", "XLK", target, 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", target, 100, 101, -1.0, "test"),
+            Quote("Financials", "XLF", target, 100, 99.5, 0.5, "test"),
+        ]
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={},
+            sector_quotes={quote.name: quote for quote in sectors},
+            risk_quotes={
+                "10Y Yield": Quote("10Y Yield", "^TNX", target, 4.2, 4.1, 2.4, "test")
+            },
+            warnings=[],
+        )
+        news = [
+            NewsItem(
+                title="Nvidia and AMD rise as AI chip demand expands",
+                description="Semiconductor demand remains strong.",
+                link="https://example.com",
+                source="Example",
+                published="",
+                score=10,
+            )
+        ]
+
+        cards = _sector_scorecards(snapshot, sectors, news)
+        technology = next(card for card in cards if card.sector == "Technology")
+
+        self.assertGreater(technology.price_score, 0)
+        self.assertGreater(technology.news_score, 0)
+        self.assertLess(technology.rate_score, 0)
+        self.assertGreater(technology.flow_score, 0)
+        self.assertEqual(
+            technology.total_score,
+            technology.price_score + technology.news_score + technology.rate_score + technology.flow_score,
+        )
+
+    def test_sector_score_report_contains_component_labels(self) -> None:
+        target = date(2026, 7, 7)
+        sectors = [
+            Quote("Technology", "XLK", target, 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", target, 100, 101, -1.0, "test"),
+        ]
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={},
+            sector_quotes={quote.name: quote for quote in sectors},
+            risk_quotes={},
+            warnings=[],
+        )
+
+        text = _sector_score_report(snapshot, sectors, [])
+
+        self.assertIn("섹터 점수판", text)
+        self.assertIn("가격", text)
+        self.assertIn("뉴스", text)
+        self.assertIn("금리", text)
+        self.assertIn("수급", text)
 
     def test_quick_takeaways_show_three_decision_lines(self) -> None:
         snapshot = MarketSnapshot(

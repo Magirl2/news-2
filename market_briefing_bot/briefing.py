@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import REPORTS_DIR, Config
 from .market_calendar import current_market_note, last_completed_trading_day
-from .market_data import MarketSnapshot, RISK_KO, SECTOR_KO, fetch_market_snapshot, format_change
+from .market_data import MarketSnapshot, Quote, RISK_KO, SECTOR_KO, fetch_market_snapshot, format_change
 from .news import (
     NewsItem,
     fetch_top_news,
@@ -46,6 +46,20 @@ class Briefing:
     html_path: Path
     sources: list[str]
     warnings: list[str]
+
+
+@dataclass(frozen=True)
+class SectorScore:
+    sector: str
+    label: str
+    change_percent: float
+    price_score: int
+    news_score: int
+    rate_score: int
+    flow_score: int
+    total_score: int
+    summary: str
+    detail: str
 
 
 def _join_quotes(snapshot: MarketSnapshot) -> str:
@@ -482,6 +496,197 @@ def _news_impact_classification(
     return "참고만", "관심종목이나 주요 섹터와 직접 연결이 약해 참고 재료로 봅니다."
 
 
+def _clamp_score(value: int, low: int = -3, high: int = 3) -> int:
+    return max(low, min(high, value))
+
+
+def _format_score(score: int) -> str:
+    return f"{score:+d}"
+
+
+def _sector_price_score(quote: Quote) -> tuple[int, str]:
+    change = quote.change_percent
+    if change >= 1.5:
+        return 3, "가격 자체가 강하게 올라 매수세가 뚜렷합니다."
+    if change >= 0.5:
+        return 2, "시장 대비 우호적인 상승 흐름입니다."
+    if change > 0:
+        return 1, "상승은 했지만 강한 주도까지는 아닙니다."
+    if change <= -1.5:
+        return -3, "가격 하락이 커서 자금 이탈 신호가 강합니다."
+    if change <= -0.5:
+        return -2, "시장 안에서 약한 편에 속합니다."
+    if change < 0:
+        return -1, "소폭 약세라 추세 확인이 필요합니다."
+    return 0, "가격 변화가 거의 없어 판단 근거가 약합니다."
+
+
+def _sector_news_score(sector: str, news_items: list[NewsItem]) -> tuple[int, str]:
+    sector_keywords = {
+        "Technology": ["ai", "chip", "semiconductor", "nvidia", "amd", "micron", "intel", "cloud", "software"],
+        "Communication Services": ["meta", "alphabet", "google", "advertising", "streaming"],
+        "Consumer Discretionary": ["tesla", "amazon", "consumer", "retail", "auto"],
+        "Industrials": ["defense", "aerospace", "infrastructure", "industrial"],
+        "Materials": ["copper", "steel", "lithium", "materials", "mining"],
+        "Financials": ["bank", "banks", "yield curve", "credit", "financial"],
+        "Energy": ["oil", "crude", "energy", "gas", "opec"],
+        "Utilities": ["utilities", "power", "electricity", "grid"],
+        "Real Estate": ["real estate", "reit", "mortgage", "property"],
+        "Health Care": ["health", "drug", "pharma", "biotech", "medicare"],
+        "Consumer Staples": ["staples", "grocery", "food", "beverage"],
+    }
+    score = 0
+    hits: list[str] = []
+    for item in news_items:
+        label = korean_news_label(item)
+        mapped_sector = _news_label_sector(label)
+        text = f"{item.title} {item.description}".lower()
+        keyword_hit = any(keyword in text for keyword in sector_keywords.get(sector, []))
+        if mapped_sector != sector and not keyword_hit:
+            continue
+        sentiment = korean_news_sentiment(item)[0]
+        points = _sentiment_points(sentiment)
+        score += points
+        hits.append(f"{label} {sentiment}")
+
+    score = _clamp_score(score)
+    if not hits:
+        return 0, "직접 연결되는 주요 뉴스가 부족해 가격과 수급을 더 봐야 합니다."
+    if score > 0:
+        return score, f"관련 뉴스가 우호적입니다({', '.join(hits[:2])})."
+    if score < 0:
+        return score, f"관련 뉴스에 부담 요인이 있습니다({', '.join(hits[:2])})."
+    return 0, f"관련 뉴스가 섞여 있어 방향성이 뚜렷하지 않습니다({', '.join(hits[:2])})."
+
+
+def _sector_rate_score(sector: str, snapshot: MarketSnapshot) -> tuple[int, str]:
+    ten_year = snapshot.risk_quotes.get("10Y Yield")
+    if not ten_year:
+        return 0, "10년물 금리 데이터를 확인하지 못했습니다."
+
+    change = ten_year.change_percent
+    if abs(change) < 0.2:
+        return 0, "금리 변화가 작아 섹터 영향은 제한적입니다."
+
+    growth = {"Technology", "Communication Services", "Consumer Discretionary"}
+    rate_sensitive = growth | {"Real Estate", "Utilities"}
+    if sector in rate_sensitive:
+        if change > 1.0:
+            return -2, "금리 상승이 성장주/금리민감 섹터 밸류에이션에 부담입니다."
+        if change > 0:
+            return -1, "금리 상승 방향이 섹터에 약한 부담입니다."
+        if change < -1.0:
+            return 2, "금리 하락이 성장주/금리민감 섹터에 우호적입니다."
+        return 1, "금리 하락 방향이 섹터에 약한 우호 요인입니다."
+
+    if sector == "Financials":
+        if change > 0:
+            return 1, "금리 상승은 은행 순이자마진 기대에 일부 우호적입니다."
+        return -1, "금리 하락은 금융주 이익 기대를 낮출 수 있습니다."
+
+    if change > 1.0:
+        return -1, "금리 상승은 시장 전반 위험선호를 낮추는 요인입니다."
+    if change < -1.0:
+        return 1, "금리 하락은 시장 전반 위험선호에 우호적입니다."
+    return 0, "금리 영향은 중립에 가깝습니다."
+
+
+def _sector_flow_score(quote: Quote, sectors: list[Quote]) -> tuple[int, str]:
+    if not sectors:
+        return 0, "섹터 순위 데이터가 부족합니다."
+
+    ranked = sorted(sectors, key=lambda item: item.change_percent, reverse=True)
+    rank = next((index for index, item in enumerate(ranked, start=1) if item.name == quote.name), len(ranked))
+    count = len(ranked)
+    top_cut = max(1, count // 3)
+    bottom_cut = count - top_cut + 1
+
+    if rank == 1:
+        return 3, "섹터 순위 1위로 자금 유입이 가장 강한 축입니다."
+    if rank <= top_cut:
+        return 2, "상위권 섹터라 상대 자금 유입이 추정됩니다."
+    if rank == count:
+        return -3, "섹터 순위 최하위로 자금 이탈 압력이 큽니다."
+    if rank >= bottom_cut:
+        return -2, "하위권 섹터라 상대적으로 소외되고 있습니다."
+    if quote.change_percent > 0:
+        return 1, "중간권이지만 플러스 흐름은 유지했습니다."
+    if quote.change_percent < 0:
+        return -1, "중간권이지만 마이너스 흐름이라 확인이 필요합니다."
+    return 0, "수급 우위가 뚜렷하지 않습니다."
+
+
+def _sector_total_summary(total_score: int) -> str:
+    if total_score >= 6:
+        return "강한 우위"
+    if total_score >= 3:
+        return "우위 관찰"
+    if total_score <= -6:
+        return "강한 경계"
+    if total_score <= -3:
+        return "약세 경계"
+    return "중립 확인"
+
+
+def _sector_scorecards(
+    snapshot: MarketSnapshot,
+    sectors: list[Quote] | None = None,
+    news_items: list[NewsItem] | None = None,
+) -> list[SectorScore]:
+    sector_quotes = sectors or sorted(
+        snapshot.sector_quotes.values(), key=lambda quote: quote.change_percent, reverse=True
+    )
+    items = news_items or []
+    cards: list[SectorScore] = []
+    for quote in sector_quotes:
+        price_score, price_reason = _sector_price_score(quote)
+        news_score, news_reason = _sector_news_score(quote.name, items)
+        rate_score, rate_reason = _sector_rate_score(quote.name, snapshot)
+        flow_score, flow_reason = _sector_flow_score(quote, sector_quotes)
+        total_score = price_score + news_score + rate_score + flow_score
+        cards.append(
+            SectorScore(
+                sector=quote.name,
+                label=SECTOR_KO.get(quote.name, quote.name),
+                change_percent=quote.change_percent,
+                price_score=price_score,
+                news_score=news_score,
+                rate_score=rate_score,
+                flow_score=flow_score,
+                total_score=total_score,
+                summary=_sector_total_summary(total_score),
+                detail=(
+                    f"가격: {price_reason} 뉴스: {news_reason} "
+                    f"금리: {rate_reason} 수급: {flow_reason}"
+                ),
+            )
+        )
+    return sorted(cards, key=lambda card: (card.total_score, card.change_percent), reverse=True)
+
+
+def _sector_score_report(
+    snapshot: MarketSnapshot,
+    sectors: list[Quote],
+    news_items: list[NewsItem],
+) -> str:
+    cards = _sector_scorecards(snapshot, sectors, news_items)
+    if not cards:
+        return "섹터 점수판\n섹터 데이터를 가져오지 못해 점수화할 수 없습니다."
+
+    lines = [
+        "섹터 점수판",
+        "총점 = 가격 점수 + 뉴스 점수 + 금리 영향 + 수급 추정입니다. +3 이상은 우위, -3 이하는 경계로 봅니다.",
+    ]
+    for card in cards:
+        lines.append(
+            f"- {card.label}: 총점 {_format_score(card.total_score)} / "
+            f"가격 {_format_score(card.price_score)}, 뉴스 {_format_score(card.news_score)}, "
+            f"금리 {_format_score(card.rate_score)}, 수급 {_format_score(card.flow_score)} / "
+            f"{card.summary} / {card.detail}"
+        )
+    return "\n".join(lines)
+
+
 def _first_checkpoint(item: NewsItem) -> str:
     checkpoints = korean_news_checkpoints(item)
     return checkpoints[0] if checkpoints else "다음 거래일 가격과 거래량 반응 확인"
@@ -780,7 +985,7 @@ def _render_report_sections(text: str) -> str:
             class_name += " report-decision"
         elif "이벤트" in title or "SEC 공시" in title or "실적 발표" in title:
             class_name += " report-event"
-        elif "핵심 리스크" in title or "섹터 로테이션" in title or "오늘의 경고" in title:
+        elif "핵심 리스크" in title or "섹터 로테이션" in title or "섹터 점수판" in title or "오늘의 경고" in title:
             class_name += " report-event"
         elif "전일 후보 추적" in title:
             class_name += " report-tracking"
@@ -834,6 +1039,36 @@ def _write_html_report(
               <div class="sector-name">{html.escape(SECTOR_KO.get(quote.name, quote.name))}</div>
               <div class="sector-change">{html.escape(format_change(quote.change_percent))}</div>
               <div class="bar"><span style="width: {int(22 + intensity * 78)}%; background: {color_for(quote.change_percent)}"></span></div>
+            </section>
+            """
+        )
+
+    sector_score_cards = []
+    for card in _sector_scorecards(snapshot, sectors, news_items):
+        if card.total_score >= 3:
+            score_class = "score-positive"
+        elif card.total_score <= -3:
+            score_class = "score-negative"
+        else:
+            score_class = "score-neutral"
+        sector_score_cards.append(
+            f"""
+            <section class="sector-score {score_class}">
+              <div class="score-top">
+                <div>
+                  <strong>{html.escape(card.label)}</strong>
+                  <span>{html.escape(format_change(card.change_percent))}</span>
+                </div>
+                <b>{html.escape(_format_score(card.total_score))}</b>
+              </div>
+              <p>{html.escape(card.summary)}</p>
+              <div class="score-parts">
+                <span>가격 <b>{html.escape(_format_score(card.price_score))}</b></span>
+                <span>뉴스 <b>{html.escape(_format_score(card.news_score))}</b></span>
+                <span>금리 <b>{html.escape(_format_score(card.rate_score))}</b></span>
+                <span>수급 <b>{html.escape(_format_score(card.flow_score))}</b></span>
+              </div>
+              <small>{html.escape(card.detail)}</small>
             </section>
             """
         )
@@ -925,6 +1160,20 @@ def _write_html_report(
     .sector-change {{ font-size: 24px; font-weight: 700; margin-bottom: 10px; }}
     .bar {{ height: 8px; background: #edf0f5; border-radius: 999px; overflow: hidden; }}
     .bar span {{ display: block; height: 100%; border-radius: 999px; }}
+    .sector-score-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }}
+    .sector-score {{ background: #fff; border: 1px solid #e1e5ec; border-left: 6px solid #98a2b3; border-radius: 8px; padding: 14px; line-height: 1.5; }}
+    .sector-score.score-positive {{ border-left-color: var(--green); background: #f6fef9; }}
+    .sector-score.score-negative {{ border-left-color: var(--red); background: #fff8f7; }}
+    .sector-score.score-neutral {{ border-left-color: #d0d5dd; background: #fff; }}
+    .score-top {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }}
+    .score-top strong {{ display: block; font-size: 17px; }}
+    .score-top span {{ display: block; color: var(--muted); margin-top: 2px; }}
+    .score-top > b {{ font-size: 26px; line-height: 1; }}
+    .sector-score p {{ margin: 10px 0; font-weight: 800; }}
+    .score-parts {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; }}
+    .score-parts span {{ display: block; background: #f2f4f7; border-radius: 6px; padding: 7px 5px; text-align: center; color: #475467; font-size: 12px; }}
+    .score-parts b {{ display: block; margin-top: 2px; color: #111827; font-size: 15px; }}
+    .sector-score small {{ display: block; color: #475467; }}
     .news-dashboard {{ margin-top: 20px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }}
     .dashboard-head {{ display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }}
     .dashboard-head h2 {{ margin: 0 0 5px; }}
@@ -982,6 +1231,7 @@ def _write_html_report(
       .hero, .report-section {{ padding: 18px; }}
       .quick-summary {{ padding: 18px; }}
       .three-lines, .quick-split {{ grid-template-columns: 1fr; }}
+      .sector-score-grid {{ grid-template-columns: 1fr; }}
       .dashboard-head {{ display: block; }}
       .read-badge {{ margin-bottom: 10px; }}
       .market-line {{ font-size: 16px; }}
@@ -999,6 +1249,8 @@ def _write_html_report(
     {quick_summary}
     <h2>섹터맵</h2>
     <div class="grid">{''.join(sector_cards)}</div>
+    <h2>섹터 점수판</h2>
+    <div class="sector-score-grid">{''.join(sector_score_cards)}</div>
     {news_dashboard}
     <h2>주요 뉴스 분석</h2>
     <ol class="news-list">{''.join(news_cards)}</ol>
@@ -1078,6 +1330,7 @@ def build_briefing(config: Config) -> Briefing:
             f"폭: {_sector_breadth(snapshot)}\n"
             f"해석: {_sector_reason(strongest, weakest)}"
         ),
+        _sector_score_report(snapshot, sectors, news_items),
         _sector_driver_card(sectors, snapshot, news_items),
         _risk_card(snapshot),
         event_text,
