@@ -9,7 +9,16 @@ from pathlib import Path
 from .config import REPORTS_DIR, Config
 from .ai_news import NewsInterpretation, build_news_interpretations, rule_based_news_interpretation
 from .market_calendar import current_market_note, last_completed_trading_day
-from .market_data import MarketSnapshot, Quote, RISK_KO, SECTOR_KO, fetch_market_snapshot, format_change
+from .market_data import (
+    MarketSnapshot,
+    Quote,
+    RISK_KO,
+    SECTOR_KO,
+    fetch_market_snapshot,
+    fetch_stooq_daily,
+    fetch_yahoo_daily,
+    format_change,
+)
 from .news import (
     NewsItem,
     fetch_top_news,
@@ -949,6 +958,138 @@ def _warnings_block(warnings: list[str], limit: int = 6) -> str:
     return "\n".join(lines)
 
 
+def _chart_rows_for_quote(quote: Quote, target_date) -> list[dict]:
+    if quote.source.startswith("Stooq") or quote.symbol.endswith(".us"):
+        rows = fetch_stooq_daily(quote.symbol)
+    else:
+        try:
+            rows = fetch_yahoo_daily(quote.symbol)
+        except Exception:  # noqa: BLE001 - a chart should never break the report.
+            if quote.symbol.isalpha():
+                rows = fetch_stooq_daily(f"{quote.symbol.lower()}.us")
+            else:
+                raise
+    rows = [row for row in rows if row["date"] <= target_date and row.get("close") is not None]
+    if len(rows) < 2:
+        raise RuntimeError("차트용 가격 데이터가 부족합니다.")
+    return rows[-20:]
+
+
+def _mini_chart_svg(rows: list[dict], color: str = "#2454a6") -> str:
+    closes = [float(row["close"]) for row in rows]
+    low = min(closes)
+    high = max(closes)
+    spread = high - low
+    width = 220
+    height = 96
+    left = 8
+    right = 212
+    top = 16
+    bottom = 78
+    if len(closes) < 2:
+        raise RuntimeError("차트용 가격 데이터가 부족합니다.")
+
+    points = []
+    for index, close in enumerate(closes):
+        x = left + (right - left) * index / (len(closes) - 1)
+        if spread == 0:
+            y = (top + bottom) / 2
+        else:
+            y = bottom - (close - low) / spread * (bottom - top)
+        points.append(f"{x:.1f},{y:.1f}")
+
+    return (
+        '<svg class="mini-chart" viewBox="0 0 220 96" role="img" aria-label="20일 가격 차트">'
+        '<line x1="8" y1="78" x2="212" y2="78" stroke="#e4e7ec" stroke-width="1"/>'
+        '<line x1="8" y1="16" x2="8" y2="78" stroke="#eef2f6" stroke-width="1"/>'
+        f'<polyline points="{" ".join(points)}" fill="none" stroke="{html.escape(color)}" stroke-width="3" '
+        'stroke-linecap="round" stroke-linejoin="round"/>'
+        f'<circle cx="{points[-1].split(",")[0]}" cy="{points[-1].split(",")[1]}" r="3.5" fill="{html.escape(color)}"/>'
+        '</svg>'
+    )
+
+
+def _chart_card(title: str, quote: Quote, target_date, color: str = "#2454a6") -> str:
+    try:
+        rows = _chart_rows_for_quote(quote, target_date)
+        svg = _mini_chart_svg(rows, color)
+        start = float(rows[0]["close"])
+        end = float(rows[-1]["close"])
+        period_change = ((end - start) / start) * 100 if start else 0.0
+        first_date = rows[0]["date"].isoformat()
+        last_date = rows[-1]["date"].isoformat()
+        return f"""
+        <section class="chart-card">
+          <div class="chart-title">
+            <strong>{html.escape(title)}</strong>
+            <span>{html.escape(format_change(quote.change_percent))}</span>
+          </div>
+          {svg}
+          <div class="chart-meta">
+            <span>20일 {html.escape(format_change(period_change))}</span>
+            <span>{html.escape(first_date)} ~ {html.escape(last_date)}</span>
+          </div>
+          <small>출처: {html.escape(quote.source)}</small>
+        </section>
+        """
+    except Exception as exc:  # noqa: BLE001 - render a clear placeholder instead.
+        return f"""
+        <section class="chart-card chart-missing">
+          <div class="chart-title">
+            <strong>{html.escape(title)}</strong>
+            <span>확인 필요</span>
+          </div>
+          <div class="chart-placeholder">차트 데이터를 가져오지 못했습니다.</div>
+          <small>{html.escape(str(exc))}</small>
+        </section>
+        """
+
+
+def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
+    chart_items: list[tuple[str, Quote, str]] = []
+    for name, color in (("S&P 500", "#2454a6"), ("Nasdaq", "#7a5af8")):
+        quote = snapshot.index_quotes.get(name)
+        if quote:
+            chart_items.append((name, quote, color))
+    for name, color in (("VIX", "#b42318"), ("10Y Yield", "#b54708")):
+        quote = snapshot.risk_quotes.get(name)
+        if quote:
+            chart_items.append((RISK_KO.get(name, name), quote, color))
+
+    selected_sectors = []
+    if sectors:
+        selected_sectors.extend(sectors[:3])
+        selected_sectors.extend(list(reversed(sectors[-2:])))
+    seen = {quote.name for _title, quote, _color in chart_items}
+    for quote in selected_sectors:
+        if quote.name in seen:
+            continue
+        seen.add(quote.name)
+        color = "#0f7b3b" if quote.change_percent >= 0 else "#b42318"
+        chart_items.append((SECTOR_KO.get(quote.name, quote.name), quote, color))
+
+    cards = "".join(
+        _chart_card(title, quote, snapshot.target_date, color)
+        for title, quote, color in chart_items
+    )
+    if not cards:
+        cards = (
+            '<section class="chart-card chart-missing">'
+            '<div class="chart-title"><strong>차트</strong><span>확인 필요</span></div>'
+            '<div class="chart-placeholder">차트로 표시할 가격 데이터가 없습니다.</div>'
+            '</section>'
+        )
+    return f"""
+    <section class="charts-section">
+      <div class="charts-head">
+        <h2>가격 차트</h2>
+        <p>S&P500, Nasdaq, VIX, 10년물 금리와 주요 섹터 ETF의 최근 20거래일 흐름입니다.</p>
+      </div>
+      <div class="chart-grid">{cards}</div>
+    </section>
+    """
+
+
 def _render_report_body_lines(lines: list[str]) -> str:
     html_parts: list[str] = []
     in_list = False
@@ -1137,6 +1278,7 @@ def _write_html_report(
     rendered_sections = _render_report_sections(text)
     news_dashboard = _news_dashboard_html(snapshot, news_items)
     quick_summary = _mobile_quick_summary_html(snapshot, sectors, news_items, watchlist_actions)
+    chart_section = _market_charts_html(snapshot, sectors)
     html_text = f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -1200,6 +1342,19 @@ def _write_html_report(
     .score-parts span {{ display: block; background: #f2f4f7; border-radius: 6px; padding: 7px 5px; text-align: center; color: #475467; font-size: 12px; }}
     .score-parts b {{ display: block; margin-top: 2px; color: #111827; font-size: 15px; }}
     .sector-score small {{ display: block; color: #475467; }}
+    .charts-section {{ margin: 20px 0; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }}
+    .charts-head h2 {{ margin: 0 0 6px; }}
+    .charts-head p {{ margin: 0 0 14px; color: var(--muted); line-height: 1.5; }}
+    .chart-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }}
+    .chart-card {{ border: 1px solid #e4e7ec; border-radius: 8px; padding: 12px; background: #fcfcfd; }}
+    .chart-title {{ display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }}
+    .chart-title strong {{ font-size: 15px; }}
+    .chart-title span {{ font-size: 13px; font-weight: 800; color: #344054; }}
+    .mini-chart {{ display: block; width: 100%; height: 96px; }}
+    .chart-meta {{ display: flex; justify-content: space-between; gap: 8px; color: #475467; font-size: 12px; margin-top: 6px; }}
+    .chart-card small {{ display: block; color: #667085; font-size: 12px; margin-top: 6px; }}
+    .chart-placeholder {{ display: flex; align-items: center; justify-content: center; min-height: 96px; background: #f2f4f7; border-radius: 6px; color: #667085; text-align: center; padding: 10px; }}
+    .chart-missing {{ border-style: dashed; background: #fff; }}
     .news-dashboard {{ margin-top: 20px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }}
     .dashboard-head {{ display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }}
     .dashboard-head h2 {{ margin: 0 0 5px; }}
@@ -1273,6 +1428,7 @@ def _write_html_report(
       <p class="one-line">{html.escape(one_line)}</p>
     </header>
     {quick_summary}
+    {chart_section}
     <h2>섹터맵</h2>
     <div class="grid">{''.join(sector_cards)}</div>
     <h2>섹터 점수판</h2>

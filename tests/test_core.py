@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 from market_briefing_bot.briefing import (
     _importance_badge_class,
+    _market_charts_html,
+    _mini_chart_svg,
     _mobile_quick_summary_html,
     _news_card,
     _news_dashboard,
@@ -773,6 +775,55 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("시장 판단", html)
         self.assertIn("관심종목별 오늘 대응", html)
         self.assertIn("상세 보고서", html)
+
+
+    def test_mini_chart_svg_renders_polyline(self) -> None:
+        rows = [
+            {"date": date(2026, 7, 1), "close": 100.0},
+            {"date": date(2026, 7, 2), "close": 102.0},
+            {"date": date(2026, 7, 3), "close": 101.0},
+        ]
+
+        svg = _mini_chart_svg(rows)
+
+        self.assertIn("<svg", svg)
+        self.assertIn("<polyline", svg)
+        self.assertIn("mini-chart", svg)
+
+    def test_market_charts_html_renders_cards_and_handles_failures(self) -> None:
+        target = date(2026, 7, 7)
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", target, 100, 99, 1.0, "Yahoo Finance")
+            },
+            sector_quotes={
+                "Technology": Quote("Technology", "XLK", target, 100, 99, 1.0, "Yahoo Finance")
+            },
+            risk_quotes={
+                "VIX": Quote("VIX", "^VIX", target, 15, 16, -6.0, "Yahoo Finance")
+            },
+            warnings=[],
+        )
+        sectors = list(snapshot.sector_quotes.values())
+        rows = [
+            {"date": date(2026, 7, 1), "close": 100.0},
+            {"date": date(2026, 7, 2), "close": 101.0},
+            {"date": date(2026, 7, 7), "close": 103.0},
+        ]
+        with patch("market_briefing_bot.briefing.fetch_yahoo_daily", return_value=rows):
+            html = _market_charts_html(snapshot, sectors)
+
+        self.assertIn("가격 차트", html)
+        self.assertIn("S&amp;P 500", html)
+        self.assertIn("mini-chart", html)
+
+        with patch("market_briefing_bot.briefing.fetch_yahoo_daily", side_effect=RuntimeError("down")):
+            with patch("market_briefing_bot.briefing.fetch_stooq_daily", side_effect=RuntimeError("down")):
+                fallback_html = _market_charts_html(snapshot, sectors)
+
+        self.assertIn("확인 필요", fallback_html)
+        self.assertIn("chart-missing", fallback_html)
 
 
 class WatchlistTests(unittest.TestCase):
