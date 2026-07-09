@@ -434,3 +434,127 @@ def build_previous_signal_review(snapshot: MarketSnapshot, previous_signals: dic
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
     return "\n".join(lines), warnings
+
+def _evaluate_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> dict[str, Any]:
+    symbol = str(signal["symbol"])
+    current_close = _current_close(symbol, snapshot.target_date)
+    previous_close = float(signal["close"])
+    change = ((current_close - previous_close) / previous_close) * 100
+    entry_price = float(signal["entry_price"])
+    stop_price = float(signal["stop_price"])
+    support_price = float(signal.get("support_price", previous_close))
+    stance = str(signal.get("stance", ""))
+    is_interest = "관심" in stance or "愿" in stance
+
+    if is_interest:
+        if current_close >= entry_price:
+            state = "매수 가격 도달"
+            verdict = "성공"
+            reason = "전일 관심 후보가 제시한 매수 조건까지 올라왔습니다."
+            next_action = (
+                f"무리한 추격보다 {_money(entry_price)} 위에서 버티는지 보고, "
+                f"{_money(support_price)} 이탈 시 비중 확대를 멈춥니다."
+            )
+        elif current_close <= stop_price:
+            state = "손절/무효화 기준 이탈"
+            verdict = "실패"
+            reason = "관심 후보였지만 가격이 방어 기준을 깨서 전일 아이디어가 훼손됐습니다."
+            next_action = f"관심 후보에서 제외하고 {_money(entry_price)} 회복 전까지 신규 매수는 보류합니다."
+        elif current_close >= support_price or change > 0:
+            state = "관찰 유지"
+            verdict = "보류"
+            reason = "매수 조건에는 못 닿았지만 지지권 또는 플러스 흐름은 유지했습니다."
+            next_action = f"{_money(entry_price)} 돌파 여부를 다시 확인하고, {_money(stop_price)} 이탈 시 실패로 전환합니다."
+        else:
+            state = "관찰 유지"
+            verdict = "보류"
+            reason = "아직 매수 조건과 무효화 조건 사이에 있어 결론을 미루는 구간입니다."
+            next_action = f"{_money(entry_price)} 회복 전에는 추격하지 말고 {_money(stop_price)} 방어 여부를 봅니다."
+    else:
+        if current_close >= entry_price:
+            state = "회복 확인, 비선호 해제 검토"
+            verdict = "실패"
+            reason = "비선호 후보가 회복 기준을 넘어 약세 판단이 틀렸을 가능성이 커졌습니다."
+            next_action = f"비선호에서 제외하고 강세가 유지되면 {_money(support_price)} 지지 여부를 새로 봅니다."
+        elif current_close <= stop_price:
+            state = "약세 지속, 회피 판단 유효"
+            verdict = "성공"
+            reason = "전일 비선호 판단대로 가격이 더 약해져 회피 아이디어가 맞았습니다."
+            next_action = f"반등 매수는 계속 보류하고 {_money(entry_price)} 회복 전까지 위험 후보로 둡니다."
+        else:
+            state = "매수 보류 유지"
+            verdict = "보류"
+            reason = "회복 기준도 추가 약세 기준도 아직 확인되지 않았습니다."
+            next_action = f"{_money(entry_price)} 회복이면 비선호 해제, {_money(stop_price)} 이탈이면 회피 판단 성공으로 봅니다."
+
+    return {
+        "symbol": symbol,
+        "name": signal.get("name", symbol),
+        "stance": stance,
+        "score": signal.get("score", "?"),
+        "current_close": current_close,
+        "previous_close": previous_close,
+        "change": change,
+        "entry_price": entry_price,
+        "stop_price": stop_price,
+        "support_price": support_price,
+        "state": state,
+        "verdict": verdict,
+        "reason": reason,
+        "next_action": next_action,
+    }
+
+
+def _format_tracked_signal(result: dict[str, Any]) -> str:
+    return (
+        f"- {result['name']}({result['symbol']}) / 전일 점수 {result['score']}/100 "
+        f"/ 현재 {_money(float(result['current_close']))}({format_change(float(result['change']))}) "
+        f"/ 판정: {result['verdict']} / 상태: {result['state']}\n"
+        f"  이유: {result['reason']}\n"
+        f"  다음 대응: {result['next_action']}"
+    )
+
+
+def _track_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> str:
+    return _format_tracked_signal(_evaluate_signal(signal, snapshot))
+
+
+def build_previous_signal_review(snapshot: MarketSnapshot, previous_signals: dict[str, Any] | None) -> tuple[str, list[str]]:
+    warnings: list[str] = []
+    if not previous_signals:
+        return "전일 후보 추적\n이전 후보 기록이 없어 오늘부터 추적을 시작합니다.", warnings
+
+    previous_date = previous_signals.get("target_date", "이전 거래일")
+    lines = [f"전일 후보 추적\n기준: {previous_date} 후보를 {snapshot.target_date.isoformat()} 종가로 평가"]
+    verdict_counts = {"성공": 0, "실패": 0, "보류": 0}
+
+    interest = previous_signals.get("interest") or []
+    avoid = previous_signals.get("avoid") or []
+    if interest:
+        lines.append("관심 후보 평가")
+        for signal in interest:
+            try:
+                result = _evaluate_signal(signal, snapshot)
+                verdict_counts[str(result["verdict"])] += 1
+                lines.append(_format_tracked_signal(result))
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
+    if avoid:
+        lines.append("비선호 후보 평가")
+        for signal in avoid:
+            try:
+                result = _evaluate_signal(signal, snapshot)
+                verdict_counts[str(result["verdict"])] += 1
+                lines.append(_format_tracked_signal(result))
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
+
+    total = sum(verdict_counts.values())
+    if total:
+        lines.insert(
+            1,
+            f"요약: 성공 {verdict_counts['성공']} / 실패 {verdict_counts['실패']} / 보류 {verdict_counts['보류']}",
+        )
+    else:
+        lines.append("평가할 전일 후보가 없습니다.")
+    return "\n".join(lines), warnings

@@ -539,7 +539,44 @@ class InvestmentPlanTests(unittest.TestCase):
             text, warnings = build_previous_signal_review(snapshot, previous)
         self.assertFalse(warnings)
         self.assertIn("전일 후보 추적", text)
-        self.assertIn("매수 타점 도달", text)
+        self.assertIn("판정: 성공", text)
+        self.assertIn("매수 가격 도달", text)
+        self.assertIn("다음 대응", text)
+
+    def test_previous_signal_review_marks_avoid_success_and_summary(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 3),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        previous = {
+            "target_date": "2026-07-02",
+            "interest": [],
+            "avoid": [
+                {
+                    "stance": "비선호 후보",
+                    "symbol": "TSLA",
+                    "name": "테슬라",
+                    "close": 100.0,
+                    "score": 72,
+                    "entry_price": 108.0,
+                    "support_price": 100.0,
+                    "stop_price": 95.0,
+                }
+            ],
+        }
+        rows = [{"date": date(2026, 7, 3), "close": 94.0}]
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            text, warnings = build_previous_signal_review(snapshot, previous)
+
+        self.assertFalse(warnings)
+        self.assertIn("요약: 성공 1 / 실패 0 / 보류 0", text)
+        self.assertIn("비선호 후보 평가", text)
+        self.assertIn("판정: 성공", text)
+        self.assertIn("회피 판단 유효", text)
+        self.assertIn("다음 대응", text)
 
 
 class KakaoDeliveryTextTests(unittest.TestCase):
