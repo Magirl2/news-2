@@ -15,6 +15,35 @@ SYMBOL_TO_NAME = {
 }
 
 
+SYMBOL_ALIASES = {
+    "NVDA": ["nvidia", "엔비디아"],
+    "MSFT": ["microsoft", "마이크로소프트"],
+    "AAPL": ["apple", "애플"],
+    "AVGO": ["broadcom", "브로드컴"],
+    "AMD": ["amd"],
+    "META": ["meta", "메타"],
+    "GOOGL": ["alphabet", "google", "알파벳", "구글"],
+    "NFLX": ["netflix", "넷플릭스"],
+    "DIS": ["disney", "디즈니"],
+    "AMZN": ["amazon", "아마존"],
+    "TSLA": ["tesla", "테슬라"],
+    "MU": ["micron", "마이크론"],
+    "SNDK": ["sandisk", "샌디스크"],
+    "ASTS": ["ast spacemobile", "asts"],
+    "NVO": ["novo nordisk", "노보 노디스크"],
+    "PLTR": ["palantir", "팔란티어"],
+    "TSM": ["tsmc", "taiwan semiconductor"],
+    "ASML": ["asml"],
+    "ARM": ["arm holdings", "arm"],
+    "SMCI": ["super micro", "supermicro", "슈퍼마이크로"],
+    "RTX": ["rtx", "raytheon"],
+    "LMT": ["lockheed", "록히드"],
+    "JPM": ["jpmorgan", "jp morgan", "jp모건"],
+    "GS": ["goldman", "골드만"],
+    "LLY": ["eli lilly", "일라이릴리"],
+}
+
+
 SYMBOL_TO_SECTOR = {
     symbol: sector
     for sector, stocks in SECTOR_STOCKS.items()
@@ -38,6 +67,7 @@ SYMBOL_TO_SECTOR.update(
 @dataclass(frozen=True)
 class WatchlistAction:
     symbol: str
+    sector: str | None
     close: float
     change_percent: float
     stance: str
@@ -195,6 +225,7 @@ def build_watchlist_actions(
             actions.append(
                 WatchlistAction(
                     symbol=symbol,
+                    sector=sector,
                     close=close,
                     change_percent=change_percent,
                     stance=stance,

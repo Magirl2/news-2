@@ -11,6 +11,8 @@ from market_briefing_bot.briefing import (
     _mobile_quick_summary_html,
     _news_card,
     _news_dashboard,
+    _news_impact_badge_class,
+    _news_impact_classification,
     _news_price_reaction,
     _quick_takeaways_text,
     _render_report_sections,
@@ -44,7 +46,7 @@ from market_briefing_bot.earnings_calendar import build_earnings_calendar
 from market_briefing_bot.event_calendar import build_event_calendar
 from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
-from market_briefing_bot.watchlist import build_watchlist_actions, build_watchlist_review
+from market_briefing_bot.watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
 from market_briefing_bot.investment_plan import (
     build_investment_package,
     build_investment_report,
@@ -535,6 +537,11 @@ class HtmlReportTests(unittest.TestCase):
         self.assertEqual(_importance_badge_class("B급"), "importance-b")
         self.assertEqual(_importance_badge_class("C급"), "importance-c")
 
+    def test_news_impact_badge_class_maps_direct_indirect_reference(self) -> None:
+        self.assertEqual(_news_impact_badge_class("직접 영향"), "impact-direct")
+        self.assertEqual(_news_impact_badge_class("간접 영향"), "impact-indirect")
+        self.assertEqual(_news_impact_badge_class("참고만"), "impact-reference")
+
     def test_mobile_quick_summary_separates_fast_view_from_detail(self) -> None:
         snapshot = MarketSnapshot(
             target_date=date(2026, 7, 7),
@@ -769,12 +776,55 @@ class NewsDecisionQualityTests(unittest.TestCase):
 
         card = _news_card(1, item, snapshot, max_chars=1200)
 
+        self.assertIn("영향 분류:", card)
         self.assertIn("무슨 내용:", card)
         self.assertIn("왜 중요:", card)
         self.assertIn("투자 해석:", card)
         self.assertIn("긍정 시나리오:", card)
         self.assertIn("부정 시나리오:", card)
         self.assertIn("확인 신호:", card)
+
+    def test_news_impact_classifies_direct_indirect_and_reference(self) -> None:
+        action = WatchlistAction(
+            symbol="NVDA",
+            sector="Technology",
+            close=100.0,
+            change_percent=1.0,
+            stance="긍정",
+            check_price="$100.00 위에서 지지 확인",
+            caution="관심 유지",
+            sector_text="기술 +1.00%",
+            relative_strength="섹터와 유사(+0.00%)",
+            news_impact="직접 긍정 뉴스 영향",
+        )
+        direct_item = NewsItem(
+            title="Nvidia chip demand remains strong as AI spending grows",
+            description="",
+            link="https://example.com/direct",
+            source="Example",
+            published="",
+            score=5,
+        )
+        indirect_item = NewsItem(
+            title="Software stocks rally as AI fears fade",
+            description="",
+            link="https://example.com/indirect",
+            source="Example",
+            published="",
+            score=5,
+        )
+        reference_item = NewsItem(
+            title="Retail shoppers prepare for summer travel season",
+            description="",
+            link="https://example.com/reference",
+            source="Example",
+            published="",
+            score=0,
+        )
+
+        self.assertEqual(_news_impact_classification(direct_item, [action])[0], "직접 영향")
+        self.assertEqual(_news_impact_classification(indirect_item, [action])[0], "간접 영향")
+        self.assertEqual(_news_impact_classification(reference_item, [action])[0], "참고만")
 
     def test_news_dashboard_summarizes_overall_news_read(self) -> None:
         snapshot = MarketSnapshot(

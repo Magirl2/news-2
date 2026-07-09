@@ -30,7 +30,7 @@ from .earnings_calendar import build_earnings_calendar
 from .event_calendar import build_event_calendar
 from .professional_review import build_professional_review
 from .sec_filings import build_sec_filing_alert
-from .watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
+from .watchlist import SYMBOL_ALIASES, WatchlistAction, build_watchlist_actions, build_watchlist_review
 from .investment_plan import (
     build_investment_package,
     build_previous_signal_review,
@@ -430,6 +430,58 @@ def _importance_badge_class(importance: str) -> str:
     return "importance-c"
 
 
+def _news_label_sector(label: str) -> str | None:
+    label_to_sector = {
+        "AI/반도체": "Technology",
+        "AI/클라우드": "Technology",
+        "소프트웨어": "Technology",
+        "실적": "Technology",
+        "방산": "Industrials",
+        "에너지": "Energy",
+        "금리/물가": "Technology",
+        "채권": "Technology",
+        "고용": "Technology",
+        "ETF/수급": "Technology",
+        "시장": "Technology",
+    }
+    return label_to_sector.get(label)
+
+
+def _news_impact_badge_class(impact: str) -> str:
+    if impact == "직접 영향":
+        return "impact-direct"
+    if impact == "간접 영향":
+        return "impact-indirect"
+    return "impact-reference"
+
+
+def _news_impact_classification(
+    item: NewsItem,
+    watchlist_actions: list[WatchlistAction],
+) -> tuple[str, str]:
+    text = f"{item.title} {item.description}".lower()
+    for action in watchlist_actions:
+        symbol = action.symbol.lower()
+        aliases = [alias.lower() for alias in SYMBOL_ALIASES.get(action.symbol, [])]
+        if symbol in text or any(alias and alias in text for alias in aliases):
+            return "직접 영향", f"관심종목 {action.symbol}가 뉴스에 직접 언급됐습니다."
+
+    label = korean_news_label(item)
+    sector = _news_label_sector(label)
+    if sector:
+        sector_name = SECTOR_KO.get(sector, sector)
+        affected_symbols = [
+            action.symbol
+            for action in watchlist_actions
+            if action.sector == sector
+        ]
+        if affected_symbols:
+            return "간접 영향", f"{sector_name} 섹터 뉴스라 관심종목 {', '.join(affected_symbols[:4])}에 간접 영향이 있습니다."
+        return "간접 영향", f"{sector_name} 섹터 또는 주요 지수에 영향을 줄 수 있습니다."
+
+    return "참고만", "관심종목이나 주요 섹터와 직접 연결이 약해 참고 재료로 봅니다."
+
+
 def _first_checkpoint(item: NewsItem) -> str:
     checkpoints = korean_news_checkpoints(item)
     return checkpoints[0] if checkpoints else "다음 거래일 가격과 거래량 반응 확인"
@@ -471,17 +523,25 @@ def _news_price_reaction(item: NewsItem, snapshot: MarketSnapshot) -> str:
     return "가격 반응은 관련 ETF와 대형주 움직임으로 재확인합니다."
 
 
-def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: int = 168) -> str:
+def _news_card(
+    index: int,
+    item: NewsItem,
+    snapshot: MarketSnapshot,
+    max_chars: int = 168,
+    watchlist_actions: list[WatchlistAction] | None = None,
+) -> str:
     label = korean_news_label(item)
     headline = korean_news_headline(item)
     sentiment, reason = korean_news_sentiment(item)
     importance, importance_reason = korean_news_importance(item)
+    impact, impact_reason = _news_impact_classification(item, watchlist_actions or [])
     price_reaction = _news_price_reaction(item, snapshot)
     bull_case, bear_case = korean_news_scenario(item)
     signals = korean_news_next_signals(item)
     card = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"중요도: {importance} - {importance_reason}\n"
+        f"영향 분류: {impact} - {impact_reason}\n"
         f"원문: {item.title}\n"
         f"핵심: {headline}\n"
         f"무슨 내용: {korean_news_plain_explanation(item)}\n"
@@ -499,6 +559,7 @@ def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: 
 
     compact = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
+        f"영향 분류: {impact}\n"
         f"핵심: {_shorten(headline, 54)}\n"
         f"무슨 내용: {_shorten(korean_news_plain_explanation(item), 92)}\n"
         f"투자 해석: {_shorten(korean_news_thinking_frame(item), 92)}\n"
@@ -515,13 +576,25 @@ def _news_card(index: int, item: NewsItem, snapshot: MarketSnapshot, max_chars: 
     )
 
 
-def _format_news(items: list[NewsItem], snapshot: MarketSnapshot) -> list[str]:
+def _format_news(
+    items: list[NewsItem],
+    snapshot: MarketSnapshot,
+    watchlist_actions: list[WatchlistAction] | None = None,
+) -> list[str]:
     if not items:
         return ["1. 주요 뉴스 RSS를 읽지 못했습니다. 설정과 인터넷 연결을 확인해 주세요."]
 
     cards = []
     for index, item in enumerate(items[:5], start=1):
-        cards.append(_news_card(index, item, snapshot, max_chars=1100))
+        cards.append(
+            _news_card(
+                index,
+                item,
+                snapshot,
+                max_chars=1100,
+                watchlist_actions=watchlist_actions or [],
+            )
+        )
     return cards
 
 
@@ -769,6 +842,8 @@ def _write_html_report(
     for item in news_items[:5]:
         importance, importance_reason = korean_news_importance(item)
         importance_class = _importance_badge_class(importance)
+        impact, impact_reason = _news_impact_classification(item, watchlist_actions)
+        impact_class = _news_impact_badge_class(impact)
         sentiment, sentiment_reason = korean_news_sentiment(item)
         bull_case, bear_case = korean_news_scenario(item)
         signals = korean_news_next_signals(item)
@@ -779,6 +854,7 @@ def _write_html_report(
               <strong>{html.escape(korean_news_label(item))}: {html.escape(korean_news_headline(item))}</strong>
               <span class="original-title">원문: {html.escape(item.title)}</span>
               <span class="importance-line">중요도 <b class="importance-badge {importance_class}">{html.escape(importance)}</b> {html.escape(importance_reason)}</span>
+              <span class="impact-line">영향 분류 <b class="impact-badge {impact_class}">{html.escape(impact)}</b> {html.escape(impact_reason)}</span>
               <span><b>무슨 내용:</b> {html.escape(korean_news_plain_explanation(item))}</span>
               <span><b>왜 중요:</b> {html.escape(korean_news_why_it_matters(item))}</span>
               <span><b>투자 해석:</b> <em class="sentiment">{html.escape(sentiment)}</em> - {html.escape(sentiment_reason)} {html.escape(korean_news_thinking_frame(item))}</span>
@@ -872,11 +948,15 @@ def _write_html_report(
     .news-list b {{ color: #1d2939; }}
     .news-list em {{ font-style: normal; font-weight: 800; }}
     .original-title {{ color: #667085 !important; font-size: 13px; }}
-    .news-list .importance-line {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #1d2939; }}
+    .news-list .importance-line, .news-list .impact-line {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #1d2939; }}
     .importance-badge {{ display: inline-flex; align-items: center; min-height: 22px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 800; line-height: 1; }}
     .importance-a {{ color: #b42318; background: #fff1f3; border-color: #fecdca; }}
     .importance-b {{ color: #b54708; background: #fffaeb; border-color: #fedf89; }}
     .importance-c {{ color: #175cd3; background: #eff8ff; border-color: #b2ddff; }}
+    .impact-badge {{ display: inline-flex; align-items: center; min-height: 22px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 800; line-height: 1; }}
+    .impact-direct {{ color: #b42318; background: #fff1f3; border-color: #fecdca; }}
+    .impact-indirect {{ color: #b54708; background: #fffaeb; border-color: #fedf89; }}
+    .impact-reference {{ color: #175cd3; background: #eff8ff; border-color: #b2ddff; }}
     .signal-block {{ margin-top: 10px; padding: 12px; background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 8px; }}
     .signal-block ul {{ margin: 8px 0 0; padding-left: 20px; }}
     .signal-block li {{ margin: 4px 0; padding: 0; border: 0; border-radius: 0; background: transparent; line-height: 1.45; }}
@@ -1002,7 +1082,7 @@ def build_briefing(config: Config) -> Briefing:
         _risk_card(snapshot),
         event_text,
         earnings_text,
-        *_format_news(news_items, snapshot),
+        *_format_news(news_items, snapshot, watchlist_actions),
         tracking_text,
         *([watchlist_text] if watchlist_text else []),
         *([sec_text] if sec_text else []),
