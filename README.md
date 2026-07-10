@@ -175,3 +175,8 @@ py -m market_briefing_bot setup-next
 ```
 
 실행 기록은 `logs\bot.log`에 남습니다. 자동 실행 기록은 `logs\scheduled-task.log`에 남습니다. 카카오 연결이 끝난 뒤에는 브리핑 생성 중 오류가 나면 카카오톡으로 실패 알림도 보내도록 되어 있습니다.
+## Telegram live helper
+
+The Kakao morning briefing remains unchanged. A separate Telegram live helper can answer symbol checks and manage price alerts.
+
+See `docs/TELEGRAM_LIVE_BOT.md`.
