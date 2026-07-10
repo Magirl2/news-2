@@ -88,7 +88,7 @@ def load_config() -> Config:
         kakao_link_url=_get_value(
             env_values, "KAKAO_LINK_URL", "https://finance.yahoo.com/markets"
         ),
-        kakao_send_mode=_get_value(env_values, "KAKAO_SEND_MODE", "full").lower(),
+        kakao_send_mode=_get_value(env_values, "KAKAO_SEND_MODE", "link").lower(),
         report_public_base_url=_get_value(env_values, "REPORT_PUBLIC_BASE_URL"),
         report_timezone=_get_value(env_values, "REPORT_TIMEZONE", "Asia/Seoul"),
         market_timezone=_get_value(env_values, "MARKET_TIMEZONE", "America/New_York"),

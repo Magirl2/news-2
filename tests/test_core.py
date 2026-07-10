@@ -798,6 +798,28 @@ class KakaoDeliveryTextTests(unittest.TestCase):
         self.assertIn("https://example.github.io/news-2/reports/2026-07-07_briefing.html", text)
         self.assertLessEqual(len(text), 200)
 
+    def test_link_mode_without_public_url_does_not_send_full_report(self) -> None:
+        class ConfigStub:
+            kakao_send_mode = "link"
+            report_public_base_url = ""
+            kakao_chunk_size = 200
+
+        class BriefingStub:
+            text = "미국장 마감 2026-07-07\n" + ("긴 본문\n" * 1000)
+
+            class HtmlPath:
+                name = "2026-07-07_briefing.html"
+
+                def __str__(self) -> str:
+                    return "reports/2026-07-07_briefing.html"
+
+            html_path = HtmlPath()
+
+        text = _kakao_delivery_text(ConfigStub(), BriefingStub())
+        self.assertIn("원문 발송을 막았습니다", text)
+        self.assertLess(len(text), 300)
+        self.assertNotIn("긴 본문\n긴 본문\n긴 본문", text)
+
     def test_latest_built_briefing_uses_newest_html_report(self) -> None:
         with TemporaryDirectory() as temp_dir:
             reports_dir = Path(temp_dir)

@@ -295,7 +295,13 @@ def _public_report_url(config, briefing) -> str:
 
 def _kakao_delivery_text(config, briefing) -> str:
     report_url = _public_report_url(config, briefing)
-    if config.kakao_send_mode != "link" or not report_url:
+    if config.kakao_send_mode == "link" and not report_url:
+        return (
+            "미국장 마감 보고서는 만들어졌지만 공개 링크 설정이 비어 있어 원문 발송을 막았습니다.\n"
+            "REPORT_PUBLIC_BASE_URL을 GitHub Pages reports 주소로 설정해 주세요.\n"
+            f"로컬 HTML: {briefing.html_path}"
+        )
+    if config.kakao_send_mode != "link":
         return briefing.text
 
     lines = [line.strip() for line in briefing.text.splitlines() if line.strip()]
