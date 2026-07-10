@@ -635,6 +635,9 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("비선호 후보", report)
         self.assertIn("오늘 바로 볼 종목 TOP 5", report)
         self.assertIn("지금 진입 가능 여부", report)
+        self.assertIn("비중 판단", report)
+        self.assertIn("손익비", report)
+        self.assertIn("1차 목표가", report)
         self.assertIn("시작 진입가", report)
         self.assertIn("추가 진입가", report)
         self.assertIn("확인 진입가", report)
@@ -649,8 +652,13 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertEqual(plan.setup_type, "20일선 근접 거래량형")
         self.assertEqual(plan.entry_action, "지금 소량 가능")
         self.assertEqual(plan.judgement, "지금 소량 가능")
-        self.assertEqual(plan.start_weight_percent, 25)
+        self.assertGreaterEqual(plan.start_weight_percent, 25)
         self.assertEqual(plan.start_entry_price, plan.close)
+        self.assertIsNotNone(plan.first_target_price)
+        self.assertIsNotNone(plan.risk_reward_ratio)
+        self.assertGreaterEqual(plan.risk_reward_ratio or 0, 2.0)
+        self.assertEqual(plan.risk_reward_grade, "우수")
+        self.assertIn(plan.position_mode, {"공격 비중 가능", "손익비 우수"})
         self.assertIsNotNone(plan.add_entry_price)
         self.assertIsNotNone(plan.confirm_entry_price)
         self.assertIsNotNone(plan.ma20_distance_percent)
@@ -663,6 +671,7 @@ class InvestmentPlanTests(unittest.TestCase):
 
         self.assertEqual(plan.setup_type, "추격 위험형")
         self.assertEqual(plan.entry_action, "추격 금지")
+        self.assertEqual(plan.position_mode, "진입 부적합")
         self.assertEqual(plan.start_weight_percent, 0)
         self.assertIsNone(plan.start_entry_price)
         self.assertEqual(plan.today_grade, "C")
@@ -701,9 +710,19 @@ class InvestmentPlanTests(unittest.TestCase):
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=106.0, last_volume=1400.0))
 
         self.assertEqual(plan.entry_action, "눌림 확인 후 가능")
+        self.assertEqual(plan.position_mode, "진입 부적합")
         self.assertEqual(plan.start_weight_percent, 0)
         self.assertIsNone(plan.start_entry_price)
         self.assertIn("손절폭", plan.entry_risk)
+
+    def test_poor_risk_reward_marks_entry_unsuitable(self) -> None:
+        plan = self._interest_for_rows(self._ohlcv_rows(last_close=104.0, last_volume=1400.0))
+
+        self.assertIsNotNone(plan.risk_reward_ratio)
+        self.assertLess(plan.risk_reward_ratio or 99, 1.0)
+        self.assertEqual(plan.risk_reward_grade, "나쁨")
+        self.assertEqual(plan.position_mode, "진입 부적합")
+        self.assertEqual(plan.start_weight_percent, 0)
 
     def test_three_step_entry_prices_are_exposed_in_signal(self) -> None:
         snapshot = MarketSnapshot(
@@ -726,6 +745,11 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("add_entry_price", first)
         self.assertIn("confirm_entry_price", first)
         self.assertIn("start_weight_percent", first)
+        self.assertIn("first_target_price", first)
+        self.assertIn("risk_reward_ratio", first)
+        self.assertIn("risk_reward_grade", first)
+        self.assertIn("position_mode", first)
+        self.assertIn("max_start_weight_percent", first)
         self.assertEqual(first["entry_action"], "지금 소량 가능")
 
     def test_investment_report_avoids_old_duplicate_rationale_blocks(self) -> None:
@@ -946,6 +970,31 @@ class HtmlReportTests(unittest.TestCase):
         self.assertEqual(_report_badge_class("지금 소량 가능"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("추격 금지"), "report-badge action-risk")
         self.assertEqual(_report_badge_class("A(85)"), "report-badge grade-a")
+
+    def test_position_mode_and_risk_reward_badges_render(self) -> None:
+        rendered = _render_report_sections(
+            "투자 후보\n"
+            "|종목|비중 판단|손익비 등급|\n"
+            "|---|---|---|\n"
+            "|AMD|공격 비중 가능|우수|\n"
+            "|NVDA|진입 부적합|나쁨|"
+        )
+
+        self.assertIn("report-badge position-aggressive", rendered)
+        self.assertIn("report-badge position-bad", rendered)
+        self.assertIn("report-badge rr-excellent", rendered)
+        self.assertIn("report-badge rr-bad", rendered)
+
+    def test_report_badge_class_maps_position_and_risk_reward(self) -> None:
+        self.assertEqual(_report_badge_class("공격 비중 가능"), "report-badge position-aggressive")
+        self.assertEqual(_report_badge_class("손익비 우수"), "report-badge position-good")
+        self.assertEqual(_report_badge_class("비중 확대 가능"), "report-badge position-add")
+        self.assertEqual(_report_badge_class("작게만 가능"), "report-badge position-small")
+        self.assertEqual(_report_badge_class("진입 부적합"), "report-badge position-bad")
+        self.assertEqual(_report_badge_class("우수"), "report-badge rr-excellent")
+        self.assertEqual(_report_badge_class("양호"), "report-badge rr-good")
+        self.assertEqual(_report_badge_class("보통"), "report-badge rr-normal")
+        self.assertEqual(_report_badge_class("나쁨"), "report-badge rr-bad")
 
     def test_importance_badge_class_maps_a_b_c(self) -> None:
         self.assertEqual(_importance_badge_class("A급"), "importance-a")

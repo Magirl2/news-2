@@ -1097,6 +1097,24 @@ def _report_badge_class(cell: str) -> str | None:
         return "report-badge action-wait"
     if cell in {"추격 금지", "제외"}:
         return "report-badge action-risk"
+    if cell == "공격 비중 가능":
+        return "report-badge position-aggressive"
+    if cell == "손익비 우수":
+        return "report-badge position-good"
+    if cell == "비중 확대 가능":
+        return "report-badge position-add"
+    if cell == "작게만 가능":
+        return "report-badge position-small"
+    if cell == "진입 부적합":
+        return "report-badge position-bad"
+    if cell == "우수":
+        return "report-badge rr-excellent"
+    if cell == "양호":
+        return "report-badge rr-good"
+    if cell == "보통":
+        return "report-badge rr-normal"
+    if cell == "나쁨":
+        return "report-badge rr-bad"
     if cell.startswith("A("):
         return "report-badge grade-a"
     if cell.startswith("B("):
@@ -1464,6 +1482,11 @@ def _write_html_report(
     .action-ok, .grade-a {{ background: #ecfdf3; color: #067647; border-color: #abefc6; }}
     .action-wait, .grade-b {{ background: #fffaeb; color: #b54708; border-color: #fedf89; }}
     .action-risk, .grade-c {{ background: #fef3f2; color: #b42318; border-color: #fecdca; }}
+    .position-aggressive {{ background: #064e3b; color: #ecfdf3; border-color: #047857; }}
+    .position-good, .rr-excellent {{ background: #ecfdf3; color: #067647; border-color: #abefc6; }}
+    .position-add, .rr-good {{ background: #eff8ff; color: #175cd3; border-color: #b2ddff; }}
+    .position-small, .rr-normal {{ background: #fffaeb; color: #b54708; border-color: #fedf89; }}
+    .position-bad, .rr-bad {{ background: #fef3f2; color: #b42318; border-color: #fecdca; }}
     .numbered-line {{ margin-top: 16px !important; padding-top: 14px; border-top: 1px solid #edf0f5; font-weight: 700; }}
     .key-line strong {{ display: inline-block; min-width: 86px; color: #344054; }}
     footer {{ margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }}

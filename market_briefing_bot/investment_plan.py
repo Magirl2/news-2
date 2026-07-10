@@ -52,6 +52,15 @@ class StockPlan:
     add_entry_price: float | None
     confirm_entry_price: float | None
     stop_loss_percent: float | None
+    first_target_price: float | None
+    risk_reward_ratio: float | None
+    risk_reward_grade: str
+    position_mode: str
+    max_start_weight_percent: int
+    risk_reward_reason: str
+    position_reason: str
+    size_up_condition: str
+    small_only_reason: str
     can_enter_reason: str
     entry_risk: str
     add_condition: str
@@ -422,6 +431,107 @@ def _stop_loss_percent(start_price: float | None, invalidation_price: float) -> 
     return ((start_price - invalidation_price) / start_price) * 100
 
 
+def _risk_reward_grade(ratio: float | None) -> str:
+    if ratio is None:
+        return "확인 필요"
+    if ratio >= 2.0:
+        return "우수"
+    if ratio >= 1.5:
+        return "양호"
+    if ratio >= 1.0:
+        return "보통"
+    return "나쁨"
+
+
+def _format_risk_reward(value: float | None) -> str:
+    return "확인 필요" if value is None else f"{value:.1f}R"
+
+
+def _first_target_price(metrics: dict, start_price: float | None, confirm_price: float | None) -> float | None:
+    if start_price is None:
+        return confirm_price
+    resistance_candidates = [
+        metrics.get("recent_high"),
+        metrics.get("recent_5_high"),
+        metrics.get("previous_high"),
+        confirm_price,
+        start_price * 1.05,
+    ]
+    above = [float(value) for value in resistance_candidates if value is not None and float(value) > start_price]
+    if above:
+        return max(above)
+    return start_price * 1.05
+
+
+def _risk_reward_analysis(metrics: dict, strategy: dict, chart_grade: str) -> dict[str, Any]:
+    start_price = strategy["start_entry_price"]
+    invalidation_price = strategy["invalidation_price"]
+    target_price = _first_target_price(metrics, start_price, strategy["confirm_entry_price"])
+    stop_pct = strategy["stop_loss_percent"]
+    ratio: float | None = None
+    if start_price is not None and target_price is not None and invalidation_price < start_price:
+        risk = start_price - invalidation_price
+        reward = target_price - start_price
+        if risk > 0 and reward > 0:
+            ratio = reward / risk
+    grade = _risk_reward_grade(ratio)
+    ma20_distance = metrics["ma20_distance_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    action = strategy["action"]
+    start_weight = strategy["start_weight_percent"]
+    near_ma20 = ma20_distance is not None and -2 <= ma20_distance <= 5
+    good_volume = volume_ratio is not None and volume_ratio >= 1.2
+    low_volume = volume_ratio is None or volume_ratio < 0.8
+    clear_stop = stop_pct is not None and stop_pct <= 4
+    mode = "작게만 가능"
+    max_weight = min(15, start_weight)
+
+    if action in {"추격 금지", "제외"} or start_price is None or start_weight == 0 or (stop_pct is not None and stop_pct >= 7):
+        mode = "진입 부적합"
+        max_weight = 0
+    elif ratio is not None and ratio < 1.0:
+        mode = "진입 부적합"
+        max_weight = 0
+    elif ratio is not None and ratio >= 2.0 and clear_stop and good_volume and near_ma20 and chart_grade in {"A", "B"}:
+        mode = "공격 비중 가능"
+        max_weight = max(start_weight, 35)
+    elif low_volume:
+        mode = "작게만 가능"
+        max_weight = min(10, start_weight)
+    elif ratio is not None and ratio >= 2.0:
+        mode = "손익비 우수"
+        max_weight = max(start_weight, 25)
+    elif action in {"지금 소량 가능", "지금은 1차 진입만 가능"} and strategy["add_entry_price"] is not None:
+        mode = "비중 확대 가능"
+        max_weight = max(start_weight, 20)
+
+    risk_reward_reason = (
+        "시작 진입가 또는 무효화 가격이 없어 손익비는 확인이 필요합니다."
+        if ratio is None
+        else f"무효화까지 손절폭은 {_format_risk_reward(None) if stop_pct is None else f'{stop_pct:.1f}%'}이고 1차 목표까지 손익비는 {_format_risk_reward(ratio)}입니다."
+    )
+    position_reason = f"{mode}: 시작 비중은 최대 {max_weight}% 안에서 보는 구조입니다."
+    size_up_condition = f"{_money_or_none(strategy['add_entry_price'])} 회복/지지와 거래량 확인 시 추가 비중을 검토합니다."
+    small_only_reason = "손절폭, 거래량, 이격, 손익비 중 하나라도 약하면 시작 비중을 줄여야 합니다."
+    if mode == "공격 비중 가능":
+        size_up_condition = f"{_money_or_none(strategy['add_entry_price'])} 위에서 버티고 거래량이 유지되면 비중 확대를 검토합니다."
+        small_only_reason = "장 초반 급등 후 밀리거나 거래량이 죽으면 공격 비중 조건이 사라집니다."
+    elif mode == "진입 부적합":
+        small_only_reason = "현재 가격에서는 시작 진입가가 없거나 손익비/손절폭이 맞지 않아 비중을 두지 않습니다."
+
+    return {
+        "first_target_price": target_price,
+        "risk_reward_ratio": ratio,
+        "risk_reward_grade": grade,
+        "position_mode": mode,
+        "max_start_weight_percent": max_weight,
+        "risk_reward_reason": risk_reward_reason,
+        "position_reason": position_reason,
+        "size_up_condition": size_up_condition,
+        "small_only_reason": small_only_reason,
+    }
+
+
 def _entry_strategy(metrics: dict, sector_quote: Quote, today_score: int) -> dict[str, Any]:
     close = metrics["close"]
     ma20 = metrics["ma20"]
@@ -550,6 +660,15 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
     today_score = _today_attractiveness(metrics, sector_quote, news_score)
     chart_score = _chart_confidence(metrics, sector_quote)
     strategy = _entry_strategy(metrics, sector_quote, today_score)
+    risk_plan = _risk_reward_analysis(metrics, strategy, _grade(chart_score))
+    if risk_plan["position_mode"] in {"공격 비중 가능", "손익비 우수"}:
+        strategy["start_weight_percent"] = risk_plan["max_start_weight_percent"]
+        risk_plan["position_reason"] = f"{risk_plan['position_mode']}: 시작 비중은 최대 {strategy['start_weight_percent']}% 안에서 보는 구조입니다."
+    elif risk_plan["position_mode"] == "진입 부적합":
+        strategy["start_weight_percent"] = 0
+        strategy["start_entry_price"] = None
+        risk_plan["position_reason"] = "진입 부적합: 현재 가격에서는 시작 비중을 0%로 둡니다."
+    strategy["top_reason"] = f"{strategy['action']} + {risk_plan['position_mode']}, 손익비 {_format_risk_reward(risk_plan['risk_reward_ratio'])}"
     setup_type = strategy["setup_type"]
     judgement = strategy["action"]
     support = strategy["add_entry_price"] or _support_price(close, ma20, recent_low)
@@ -633,6 +752,15 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         add_entry_price=strategy["add_entry_price"],
         confirm_entry_price=strategy["confirm_entry_price"],
         stop_loss_percent=strategy["stop_loss_percent"],
+        first_target_price=risk_plan["first_target_price"],
+        risk_reward_ratio=risk_plan["risk_reward_ratio"],
+        risk_reward_grade=risk_plan["risk_reward_grade"],
+        position_mode=risk_plan["position_mode"],
+        max_start_weight_percent=risk_plan["max_start_weight_percent"],
+        risk_reward_reason=risk_plan["risk_reward_reason"],
+        position_reason=risk_plan["position_reason"],
+        size_up_condition=risk_plan["size_up_condition"],
+        small_only_reason=risk_plan["small_only_reason"],
         can_enter_reason=strategy["can_enter_reason"],
         entry_risk=strategy["entry_risk"],
         add_condition=strategy["add_condition"],
@@ -716,6 +844,15 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
         add_entry_price=reclaim,
         confirm_entry_price=reclaim,
         stop_loss_percent=None,
+        first_target_price=reclaim,
+        risk_reward_ratio=None,
+        risk_reward_grade="확인 필요",
+        position_mode="진입 부적합",
+        max_start_weight_percent=0,
+        risk_reward_reason="시작 진입가가 없어 손익비는 확인이 필요합니다.",
+        position_reason="진입 부적합: 약한 섹터 또는 약한 가격 흐름이라 시작 비중은 0%입니다.",
+        size_up_condition=f"{_money(reclaim)} 회복 후 섹터 반등과 거래량 확인",
+        small_only_reason="현재 가격에서는 신규 진입보다 회복 확인이 우선입니다.",
         can_enter_reason="약한 섹터 또는 약한 가격 흐름이라 지금 시작 진입할 근거가 부족합니다.",
         entry_risk=why_today,
         add_condition=f"{_money(reclaim)} 회복 후 섹터 반등과 거래량 확인",
@@ -733,14 +870,18 @@ def _format_stop_pct(plan: StockPlan) -> str:
     return "확인 필요" if plan.stop_loss_percent is None else f"{plan.stop_loss_percent:.1f}%"
 
 
+def _format_target(plan: StockPlan) -> str:
+    return _money_or_none(plan.first_target_price)
+
+
 def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
     top_plans = plans[:limit]
     if not top_plans:
         return "오늘 바로 볼 종목 TOP 5\n데이터 부족으로 후보를 만들지 못했습니다."
     lines = [
         "오늘 바로 볼 종목 TOP 5",
-        "|종목|지금 진입 가능 여부|시작 비중|시작 진입가|추가 진입가|확인 진입가|무효화 가격|한 줄 이유|",
-        "|---|---|---|---|---|---|---|---|",
+        "|종목|지금 진입 가능 여부|비중 판단|시작 비중|손익비|시작 진입가|추가 진입가|확인 진입가|무효화 가격|1차 목표가|한 줄 이유|",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for plan in top_plans:
         lines.append(
@@ -749,11 +890,14 @@ def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
                 [
                     f"{plan.name}({plan.symbol})",
                     plan.entry_action,
+                    plan.position_mode,
                     _format_weight(plan),
+                    _format_risk_reward(plan.risk_reward_ratio),
                     _money_or_none(plan.start_entry_price),
                     _money_or_none(plan.add_entry_price),
                     _money_or_none(plan.confirm_entry_price),
                     _money(plan.invalidation_price),
+                    _format_target(plan),
                     plan.top_reason,
                 ]
             )
@@ -768,8 +912,8 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
     lines = [title]
     lines.extend(
         [
-            "|종목|유형|현재가|20일선 거리|거래량 상태|차트 신뢰도|오늘 매력도|지금 진입 가능 여부|시작 비중|시작 진입가|추가 진입가|확인 진입가|무효화 가격|손절폭|",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "|종목|유형|현재가|20일선 거리|거래량 상태|차트 신뢰도|오늘 매력도|지금 진입 가능 여부|비중 판단|시작 비중|최대 시작 비중|손익비|손익비 등급|1차 목표가|시작 진입가|추가 진입가|확인 진입가|무효화 가격|손절폭|",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for plan in plans:
@@ -785,7 +929,12 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
                     f"{plan.chart_confidence_grade}({plan.chart_confidence_score})",
                     f"{plan.today_grade}({plan.today_score})",
                     plan.entry_action,
+                    plan.position_mode,
                     _format_weight(plan),
+                    f"{plan.max_start_weight_percent}%",
+                    _format_risk_reward(plan.risk_reward_ratio),
+                    plan.risk_reward_grade,
+                    _format_target(plan),
                     _money_or_none(plan.start_entry_price),
                     _money_or_none(plan.add_entry_price),
                     _money_or_none(plan.confirm_entry_price),
@@ -800,6 +949,10 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
             f"{index}. {plan.name}({plan.symbol}) / {plan.sector} / {plan.entry_action} / 시작 비중 {_format_weight(plan)}",
             f"   지금 들어갈 수 있는 이유: {plan.can_enter_reason}",
             f"   지금 들어가면 위험한 이유: {plan.entry_risk}",
+            f"   손익비 판단: {plan.risk_reward_reason}",
+            f"   비중 판단: {plan.position_reason}",
+            f"   크게 들어가도 되는 조건: {plan.size_up_condition}",
+            f"   작게만 봐야 하는 이유: {plan.small_only_reason}",
             f"   추가 매수 조건: {plan.add_condition}",
             f"   무효화 기준: {_money(plan.invalidation_price)} 이탈 시 제외 또는 비중 축소",
             f"   가격 계획: 시작 {_money_or_none(plan.start_entry_price)} / 추가 {_money_or_none(plan.add_entry_price)} / 확인 {_money_or_none(plan.confirm_entry_price)}",
@@ -842,6 +995,15 @@ def _plan_signal(plan: StockPlan, target_date: date) -> dict[str, Any]:
         "add_entry_price": round(plan.add_entry_price, 4) if plan.add_entry_price is not None else None,
         "confirm_entry_price": round(plan.confirm_entry_price, 4) if plan.confirm_entry_price is not None else None,
         "stop_loss_percent": round(plan.stop_loss_percent, 4) if plan.stop_loss_percent is not None else None,
+        "first_target_price": round(plan.first_target_price, 4) if plan.first_target_price is not None else None,
+        "risk_reward_ratio": round(plan.risk_reward_ratio, 4) if plan.risk_reward_ratio is not None else None,
+        "risk_reward_grade": plan.risk_reward_grade,
+        "position_mode": plan.position_mode,
+        "max_start_weight_percent": plan.max_start_weight_percent,
+        "risk_reward_reason": plan.risk_reward_reason,
+        "position_reason": plan.position_reason,
+        "size_up_condition": plan.size_up_condition,
+        "small_only_reason": plan.small_only_reason,
         "can_enter_reason": plan.can_enter_reason,
         "entry_risk": plan.entry_risk,
         "add_condition": plan.add_condition,
