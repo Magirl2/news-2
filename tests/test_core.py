@@ -56,6 +56,7 @@ from market_briefing_bot.sec_filings import build_sec_filing_alert
 from market_briefing_bot.watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
 from market_briefing_bot.investment_plan import (
     _interest_plan,
+    _risk_reward_analysis,
     build_investment_package,
     build_investment_report,
     build_previous_signal_review,
@@ -723,6 +724,30 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertEqual(plan.risk_reward_grade, "나쁨")
         self.assertEqual(plan.position_mode, "진입 부적합")
         self.assertEqual(plan.start_weight_percent, 0)
+
+    def test_tiny_stop_does_not_create_unrealistic_risk_reward(self) -> None:
+        metrics = {
+            "recent_high": 130.0,
+            "recent_5_high": 125.0,
+            "previous_high": 124.0,
+            "ma20_distance_percent": 1.0,
+            "volume_ratio": 1.4,
+        }
+        strategy = {
+            "start_entry_price": 100.0,
+            "invalidation_price": 99.95,
+            "confirm_entry_price": 110.0,
+            "stop_loss_percent": 0.05,
+            "action": "지금 소량 가능",
+            "start_weight_percent": 25,
+            "add_entry_price": 102.0,
+        }
+
+        analysis = _risk_reward_analysis(metrics, strategy, "B")
+
+        self.assertIsNone(analysis["risk_reward_ratio"])
+        self.assertEqual(analysis["risk_reward_grade"], "확인 필요")
+        self.assertNotEqual(analysis["position_mode"], "공격 비중 가능")
 
     def test_three_step_entry_prices_are_exposed_in_signal(self) -> None:
         snapshot = MarketSnapshot(

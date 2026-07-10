@@ -450,6 +450,7 @@ def _format_risk_reward(value: float | None) -> str:
 def _first_target_price(metrics: dict, start_price: float | None, confirm_price: float | None) -> float | None:
     if start_price is None:
         return confirm_price
+    minimum_target = start_price * 1.02
     resistance_candidates = [
         metrics.get("recent_high"),
         metrics.get("recent_5_high"),
@@ -457,9 +458,9 @@ def _first_target_price(metrics: dict, start_price: float | None, confirm_price:
         confirm_price,
         start_price * 1.05,
     ]
-    above = [float(value) for value in resistance_candidates if value is not None and float(value) > start_price]
+    above = [float(value) for value in resistance_candidates if value is not None and float(value) >= minimum_target]
     if above:
-        return max(above)
+        return min(above)
     return start_price * 1.05
 
 
@@ -472,8 +473,11 @@ def _risk_reward_analysis(metrics: dict, strategy: dict, chart_grade: str) -> di
     if start_price is not None and target_price is not None and invalidation_price < start_price:
         risk = start_price - invalidation_price
         reward = target_price - start_price
-        if risk > 0 and reward > 0:
+        risk_pct = (risk / start_price) * 100
+        if risk > 0 and reward > 0 and risk_pct >= 0.8:
             ratio = reward / risk
+            if ratio > 10:
+                ratio = None
     grade = _risk_reward_grade(ratio)
     ma20_distance = metrics["ma20_distance_percent"]
     volume_ratio = metrics["volume_ratio"]
