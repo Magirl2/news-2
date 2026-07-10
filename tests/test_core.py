@@ -18,6 +18,7 @@ from market_briefing_bot.briefing import (
     _news_impact_classification,
     _news_price_reaction,
     _quick_takeaways_text,
+    _report_badge_class,
     _render_report_sections,
     _sector_driver,
     _sector_score_report,
@@ -632,17 +633,26 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("유의 섹터", report)
         self.assertIn("관심 후보", report)
         self.assertIn("비선호 후보", report)
-        self.assertIn("매수 타점", report)
-        self.assertIn("손절 타점", report)
-        self.assertIn("매수 근거", report)
-        self.assertIn("손절 근거", report)
+        self.assertIn("오늘 바로 볼 종목 TOP 5", report)
+        self.assertIn("지금 진입 가능 여부", report)
+        self.assertIn("시작 진입가", report)
+        self.assertIn("추가 진입가", report)
+        self.assertIn("확인 진입가", report)
+        self.assertIn("지금 들어갈 수 있는 이유", report)
+        self.assertIn("지금 들어가면 위험한 이유", report)
+        self.assertIn("무효화 기준", report)
         self.assertIn("점수", report)
 
     def test_near_20_day_average_with_volume_becomes_priority_candidate(self) -> None:
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=1400.0))
 
-        self.assertEqual(plan.setup_type, "20일선 지지 확인형")
-        self.assertEqual(plan.judgement, "오늘 확인 후보")
+        self.assertEqual(plan.setup_type, "20일선 근접 거래량형")
+        self.assertEqual(plan.entry_action, "지금 소량 가능")
+        self.assertEqual(plan.judgement, "지금 소량 가능")
+        self.assertEqual(plan.start_weight_percent, 25)
+        self.assertEqual(plan.start_entry_price, plan.close)
+        self.assertIsNotNone(plan.add_entry_price)
+        self.assertIsNotNone(plan.confirm_entry_price)
         self.assertIsNotNone(plan.ma20_distance_percent)
         self.assertLess(abs(plan.ma20_distance_percent or 0), 5)
         self.assertIsNotNone(plan.volume_ratio)
@@ -652,7 +662,9 @@ class InvestmentPlanTests(unittest.TestCase):
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=115.0, last_volume=1800.0))
 
         self.assertEqual(plan.setup_type, "추격 위험형")
-        self.assertEqual(plan.judgement, "신규 진입 관망")
+        self.assertEqual(plan.entry_action, "추격 금지")
+        self.assertEqual(plan.start_weight_percent, 0)
+        self.assertIsNone(plan.start_entry_price)
         self.assertEqual(plan.today_grade, "C")
 
     def test_low_volume_reduces_candidate_quality(self) -> None:
@@ -661,12 +673,15 @@ class InvestmentPlanTests(unittest.TestCase):
 
         self.assertEqual(weak.volume_status, "거래량 부족")
         self.assertLess(weak.today_score, strong.today_score)
+        self.assertLessEqual(weak.start_weight_percent, 10)
 
     def test_breaking_below_20_day_average_is_wait_and_see(self) -> None:
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=94.0, last_volume=1200.0))
 
-        self.assertEqual(plan.setup_type, "관망형")
-        self.assertIn("20일선", plan.judgement)
+        self.assertEqual(plan.setup_type, "20일선 회복 대기형")
+        self.assertEqual(plan.entry_action, "돌파 확인 후 가능")
+        self.assertEqual(plan.start_weight_percent, 0)
+        self.assertIsNone(plan.start_entry_price)
 
     def test_close_only_rows_show_volume_check_needed(self) -> None:
         rows = self._ohlcv_rows(last_close=100.0, include_volume=False)
@@ -677,8 +692,61 @@ class InvestmentPlanTests(unittest.TestCase):
         plan = self._interest_for_rows(rows)
 
         self.assertEqual(plan.volume_status, "거래량 확인 필요")
-        self.assertEqual(plan.setup_type, "거래량 부족형")
+        self.assertLessEqual(plan.start_weight_percent, 10)
+        self.assertIsNotNone(plan.add_entry_price)
+        self.assertIsNotNone(plan.confirm_entry_price)
         self.assertEqual(plan.chart_confidence_grade, "C")
+
+    def test_wide_stop_reduces_position_or_waits(self) -> None:
+        plan = self._interest_for_rows(self._ohlcv_rows(last_close=106.0, last_volume=1400.0))
+
+        self.assertEqual(plan.entry_action, "눌림 확인 후 가능")
+        self.assertEqual(plan.start_weight_percent, 0)
+        self.assertIsNone(plan.start_entry_price)
+        self.assertIn("손절폭", plan.entry_risk)
+
+    def test_three_step_entry_prices_are_exposed_in_signal(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 2), 50, 51, -2.0, "test"),
+        ]
+        rows = self._ohlcv_rows(last_close=100.0, last_volume=1400.0)
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            package = build_investment_package(snapshot, sectors, [])
+
+        first = package.signals["interest"][0]
+        self.assertIn("start_entry_price", first)
+        self.assertIn("add_entry_price", first)
+        self.assertIn("confirm_entry_price", first)
+        self.assertIn("start_weight_percent", first)
+        self.assertEqual(first["entry_action"], "지금 소량 가능")
+
+    def test_investment_report_avoids_old_duplicate_rationale_blocks(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 2), 50, 51, -2.0, "test"),
+        ]
+        rows = self._ohlcv_rows(last_close=100.0, last_volume=1400.0)
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            report, _warnings = build_investment_report(snapshot, sectors, [])
+
+        self.assertEqual(report.count("오늘 바로 볼 종목 TOP 5"), 1)
+        self.assertNotIn("매수 근거:", report)
+        self.assertNotIn("손절 근거:", report)
 
     def test_investment_package_exposes_signals_for_next_day_tracking(self) -> None:
         snapshot = MarketSnapshot(
@@ -859,6 +927,25 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn('class="report-table"', rendered)
         self.assertIn("<th>종목</th>", rendered)
         self.assertIn("<td>AMD</td>", rendered)
+
+    def test_investment_action_and_grade_cells_render_as_badges(self) -> None:
+        rendered = _render_report_sections(
+            "투자 후보\n"
+            "|종목|지금 진입 가능 여부|차트 신뢰도|\n"
+            "|---|---|---|\n"
+            "|AMD|지금 소량 가능|A(85)|\n"
+            "|NVDA|추격 금지|C(40)|"
+        )
+
+        self.assertIn("report-badge action-ok", rendered)
+        self.assertIn("report-badge action-risk", rendered)
+        self.assertIn("report-badge grade-a", rendered)
+        self.assertIn("report-badge grade-c", rendered)
+
+    def test_report_badge_class_maps_actions_and_grades(self) -> None:
+        self.assertEqual(_report_badge_class("지금 소량 가능"), "report-badge action-ok")
+        self.assertEqual(_report_badge_class("추격 금지"), "report-badge action-risk")
+        self.assertEqual(_report_badge_class("A(85)"), "report-badge grade-a")
 
     def test_importance_badge_class_maps_a_b_c(self) -> None:
         self.assertEqual(_importance_badge_class("A급"), "importance-a")

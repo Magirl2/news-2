@@ -1090,6 +1090,29 @@ def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
     """
 
 
+def _report_badge_class(cell: str) -> str | None:
+    if cell in {"지금 소량 가능", "지금은 1차 진입만 가능"}:
+        return "report-badge action-ok"
+    if cell in {"눌림 확인 후 가능", "돌파 확인 후 가능", "거래량 확인 후 가능"}:
+        return "report-badge action-wait"
+    if cell in {"추격 금지", "제외"}:
+        return "report-badge action-risk"
+    if cell.startswith("A("):
+        return "report-badge grade-a"
+    if cell.startswith("B("):
+        return "report-badge grade-b"
+    if cell.startswith("C("):
+        return "report-badge grade-c"
+    return None
+
+
+def _report_cell_html(cell: str) -> str:
+    badge_class = _report_badge_class(cell)
+    if badge_class:
+        return f'<span class="{badge_class}">{html.escape(cell)}</span>'
+    return html.escape(cell)
+
+
 def _render_report_body_lines(lines: list[str]) -> str:
     html_parts: list[str] = []
     in_list = False
@@ -1109,7 +1132,7 @@ def _render_report_body_lines(lines: list[str]) -> str:
         body = table_rows[1:]
         head_html = "".join(f"<th>{html.escape(cell)}</th>" for cell in header)
         body_html = "".join(
-            "<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>"
+            "<tr>" + "".join(f"<td>{_report_cell_html(cell)}</td>" for cell in row) + "</tr>"
             for row in body
         )
         html_parts.append(
@@ -1437,6 +1460,10 @@ def _write_html_report(
     .report-table th, .report-table td {{ padding: 9px 10px; border-bottom: 1px solid #edf0f5; text-align: left; vertical-align: top; }}
     .report-table th {{ background: #f8fafc; color: #344054; font-weight: 800; white-space: nowrap; }}
     .report-table td {{ color: #1d2939; line-height: 1.45; }}
+    .report-badge {{ display: inline-flex; align-items: center; min-height: 22px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 800; line-height: 1; white-space: nowrap; }}
+    .action-ok, .grade-a {{ background: #ecfdf3; color: #067647; border-color: #abefc6; }}
+    .action-wait, .grade-b {{ background: #fffaeb; color: #b54708; border-color: #fedf89; }}
+    .action-risk, .grade-c {{ background: #fef3f2; color: #b42318; border-color: #fecdca; }}
     .numbered-line {{ margin-top: 16px !important; padding-top: 14px; border-top: 1px solid #edf0f5; font-weight: 700; }}
     .key-line strong {{ display: inline-block; min-width: 86px; color: #344054; }}
     footer {{ margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }}
