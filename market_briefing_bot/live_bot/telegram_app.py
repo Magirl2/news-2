@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..config import ENV_FILE, _read_env_file
 from .alerts import Alert, should_trigger
 from .analyzer import LiveAnalysis, analyze_symbol
 from .commands import ParsedCommand, parse_command
@@ -32,12 +33,13 @@ class LiveBotConfig:
 
 
 def load_live_bot_config() -> LiveBotConfig:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    allowed_raw = os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "").strip()
+    env_values = _read_env_file(ENV_FILE)
+    token = _env_value(env_values, "TELEGRAM_BOT_TOKEN").strip()
+    allowed_raw = _env_value(env_values, "TELEGRAM_ALLOWED_CHAT_IDS").strip()
     allowed_chat_ids = {item.strip() for item in allowed_raw.split(",") if item.strip()}
-    db_path = Path(os.environ.get("LIVE_BOT_DB_PATH", "data/live_bot.sqlite"))
+    db_path = Path(_env_value(env_values, "LIVE_BOT_DB_PATH", "data/live_bot.sqlite"))
     try:
-        interval = max(30, int(os.environ.get("LIVE_CHECK_INTERVAL_SECONDS", "60")))
+        interval = max(30, int(_env_value(env_values, "LIVE_CHECK_INTERVAL_SECONDS", "60")))
     except ValueError:
         interval = 60
     return LiveBotConfig(
@@ -46,6 +48,10 @@ def load_live_bot_config() -> LiveBotConfig:
         db_path=db_path,
         check_interval_seconds=interval,
     )
+
+
+def _env_value(env_values: dict[str, str], key: str, default: str = "") -> str:
+    return os.environ.get(key) or env_values.get(key) or default
 
 
 class TelegramClient:
@@ -116,20 +122,13 @@ def _build_alert_from_command(
             current_price = None
     if target_price is None:
         raise RuntimeError(f"{command.symbol}의 알림 기준 가격을 계산하지 못했습니다.")
-    condition_type = command.condition_type
-    if condition_type == "add_entry":
-        condition_type = "breakout"
-    elif condition_type == "confirm_entry":
-        condition_type = "breakout"
-    elif condition_type == "invalidation":
-        condition_type = "breakdown"
     return (
         Alert(
             id=None,
             telegram_user_id=telegram_user_id,
             chat_id=chat_id,
             symbol=command.symbol,
-            condition_type=condition_type,
+            condition_type=command.condition_type,
             target_price=float(target_price),
             note=command.raw_text,
         ),
@@ -192,4 +191,3 @@ def run_polling(config: LiveBotConfig | None = None) -> None:
             except Exception as exc:  # noqa: BLE001 - user-facing bot error.
                 reply = f"처리 중 문제가 생겼습니다: {exc}"
             client.send_message(chat_id, reply)
-

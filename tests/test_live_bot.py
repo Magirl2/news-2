@@ -9,7 +9,7 @@ from market_briefing_bot.live_bot.alerts import Alert, should_trigger
 from market_briefing_bot.live_bot.commands import parse_command
 from market_briefing_bot.live_bot.formatter import format_analysis
 from market_briefing_bot.live_bot.storage import AlertStore
-from market_briefing_bot.live_bot.telegram_app import handle_text
+from market_briefing_bot.live_bot.telegram_app import handle_text, load_live_bot_config
 
 
 class LiveBotCommandTests(unittest.TestCase):
@@ -64,6 +64,23 @@ class LiveBotAlertTests(unittest.TestCase):
 
 
 class LiveBotMessageTests(unittest.TestCase):
+    def test_live_bot_config_reads_env_file_values(self) -> None:
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "market_briefing_bot.live_bot.telegram_app._read_env_file",
+            return_value={
+                "TELEGRAM_BOT_TOKEN": "token-from-env-file",
+                "TELEGRAM_ALLOWED_CHAT_IDS": "111,222",
+                "LIVE_BOT_DB_PATH": "data/custom.sqlite",
+                "LIVE_CHECK_INTERVAL_SECONDS": "45",
+            },
+        ):
+            config = load_live_bot_config()
+
+        self.assertEqual(config.telegram_bot_token, "token-from-env-file")
+        self.assertEqual(config.allowed_chat_ids, {"111", "222"})
+        self.assertEqual(config.db_path.as_posix(), "data/custom.sqlite")
+        self.assertEqual(config.check_interval_seconds, 45)
+
     def test_handle_text_registers_alert_with_explicit_price(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store = AlertStore(Path(temp_dir) / "alerts.sqlite")
@@ -73,6 +90,26 @@ class LiveBotMessageTests(unittest.TestCase):
 
             self.assertIn("AMD 알림 등록 완료", text)
             self.assertEqual(len(store.list_alerts("user-1")), 1)
+
+    def test_dynamic_alert_keeps_condition_name(self) -> None:
+        class Plan:
+            close = 153.8
+            add_entry_price = 155.0
+            confirm_entry_price = 158.0
+            invalidation_price = 150.0
+
+        class Analysis:
+            plan = Plan()
+
+        with TemporaryDirectory() as temp_dir:
+            store = AlertStore(Path(temp_dir) / "alerts.sqlite")
+            with patch("market_briefing_bot.live_bot.telegram_app.analyze_symbol", return_value=Analysis()):
+                text = handle_text("AMD 추가진입 알림", "user-1", "chat-1", store)
+
+            alerts = store.list_alerts("user-1")
+            self.assertIn("AMD 알림 등록 완료", text)
+            self.assertEqual(alerts[0].condition_type, "add_entry")
+            self.assertEqual(alerts[0].target_price, 155.0)
 
     def test_analysis_message_avoids_forbidden_phrases(self) -> None:
         class Plan:
@@ -111,4 +148,3 @@ class LiveBotMessageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from ..config import REPORTS_DIR, load_config
+from ..config import ENV_FILE, REPORTS_DIR, _read_env_file, load_config
 from ..investment_plan import SECTOR_STOCKS, _interest_plan
 from ..market_data import Quote, fetch_yahoo_daily
 from ..news import NewsItem, fetch_top_news, korean_news_headline, korean_news_label
@@ -91,7 +91,12 @@ def _fetch_related_news(symbol: str, name: str) -> tuple[list[NewsItem], list[st
     return (related or items[:3])[:3], warnings
 
 
-def analyze_symbol(symbol: str, *, include_news: bool = True, reports_dir: Path = REPORTS_DIR) -> LiveAnalysis:
+def _reports_dir_from_env() -> Path:
+    env_values = _read_env_file(ENV_FILE)
+    return Path(env_values.get("REPORTS_DIR") or REPORTS_DIR)
+
+
+def analyze_symbol(symbol: str, *, include_news: bool = True, reports_dir: Path | None = None) -> LiveAnalysis:
     symbol = symbol.upper()
     name = _name_for_symbol(symbol)
     target_date = _latest_target_date(symbol)
@@ -103,7 +108,7 @@ def analyze_symbol(symbol: str, *, include_news: bool = True, reports_dir: Path 
         news_items, warnings = _fetch_related_news(symbol, name)
     snapshot = _snapshot_stub(target_date)
     plan = _interest_plan(symbol, name, sector_quote, snapshot, news_items)
-    morning_signal = _load_morning_signal(symbol, reports_dir)
+    morning_signal = _load_morning_signal(symbol, reports_dir or _reports_dir_from_env())
     return LiveAnalysis(
         symbol=symbol,
         plan=plan,
@@ -134,4 +139,3 @@ def news_lines(items: list[NewsItem]) -> list[str]:
         f"{index}. [{korean_news_label(item)}] {korean_news_headline(item)}"
         for index, item in enumerate(items[:3], start=1)
     ]
-
