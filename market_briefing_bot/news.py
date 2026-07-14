@@ -277,8 +277,6 @@ def korean_news_label(title: str | NewsItem, description: str = "") -> str:
         return "금리/물가"
     if any(_has_keyword(text, word) for word in ("payroll", "payrolls", "employment", "jobs", "adp")):
         return "고용"
-    if any(_has_keyword(text, word) for word in ("earnings", "revenue", "profit", "guidance")):
-        return "실적"
     if any(_has_keyword(text, word) for word in ("defense", "budget", "hypersonic", "weapons")):
         return "방산"
     if any(_has_keyword(text, word) for word in ("etf", "flows", "flowing")):
@@ -287,8 +285,13 @@ def korean_news_label(title: str | NewsItem, description: str = "") -> str:
         return "소프트웨어"
     if any(_has_keyword(text, word) for word in ("cloud", "compute", "hyperscaler", "hyperscalers")):
         return "AI/클라우드"
-    if any(_has_keyword(text, word) for word in ("ai", "chip", "semiconductor", "nvidia")):
+    if any(
+        _has_keyword(text, word)
+        for word in ("ai", "chip", "semiconductor", "nvidia", "micron", "amd", "broadcom", "sk hynix", "hynix")
+    ):
         return "AI/반도체"
+    if any(_has_keyword(text, word) for word in ("earnings", "revenue", "profit", "guidance")):
+        return "실적"
     if any(_has_keyword(text, word) for word in ("oil", "energy", "crude")):
         return "에너지"
     if any(_has_keyword(text, word) for word in ("treasury", "yield", "bond")):
@@ -383,6 +386,18 @@ def _subject_text(label: str, text: str) -> str:
 
 def _event_text(text: str) -> str:
     lower_text = text.lower()
+    if "profit boom" in lower_text and (
+        "nvidia" in lower_text or "micron" in lower_text or "chip" in lower_text
+    ):
+        return "AI 수요가 반도체 이익 사이클을 키우는 흐름"
+    if ("sk hynix" in lower_text or "hynix" in lower_text) and (
+        "micron" in lower_text or "chip" in lower_text or "semiconductor" in lower_text
+    ):
+        return "메모리 공급망 변동성과 반도체 차익실현 부담"
+    if "imported volatility" in lower_text and (
+        "micron" in lower_text or "chip" in lower_text or "semiconductor" in lower_text
+    ):
+        return "해외 메모리주 변동성이 미국 반도체주로 번지는 부담"
     if any(word in lower_text for word in ("data center", "gpu", "infrastructure", "build", "spending", "capex")):
         return "AI 인프라 투자와 수요 기대"
     if any(word in lower_text for word in ("supplier", "suppliers", "hardware", "computer-hardware")):
@@ -410,6 +425,18 @@ def _event_text(text: str) -> str:
 
 def _specific_headline(text: str) -> str:
     lower_text = text.lower()
+    if "profit boom" in lower_text and (
+        "nvidia" in lower_text or "micron" in lower_text or "chip" in lower_text
+    ):
+        return "엔비디아와 마이크론이 AI 반도체 이익 사이클을 키우는 흐름"
+    if ("sk hynix" in lower_text or "hynix" in lower_text) and (
+        "micron" in lower_text or "chip stocks" in lower_text or "semiconductor" in lower_text
+    ):
+        return "SK하이닉스발 메모리 변동성이 마이크론과 반도체주에 부담을 주는 흐름"
+    if "imported volatility" in lower_text and (
+        "micron" in lower_text or "chip stocks" in lower_text or "semiconductor" in lower_text
+    ):
+        return "해외 메모리주 변동성이 마이크론과 미국 반도체주로 전이되는 흐름"
     if "futures fall" in lower_text and ("chip stocks" in lower_text or "semiconductor" in lower_text):
         return "지수 선물은 약하지만 2분기 반도체주는 강하게 오른 엇갈린 흐름"
     if ("nasdaq slips" in lower_text or "nasdaq falls" in lower_text) and (
@@ -520,6 +547,9 @@ def korean_news_plain_explanation(title: str | NewsItem, description: str = "") 
     subject = _subject_text(label, text)
     event = _event_text(text)
     headline = korean_news_headline(title_text, description_text)
+    specific = _specific_headline(text)
+    if specific:
+        return f"{specific}입니다. 쉽게 말해 {subject} 쪽에서 {event}이 가격에 어떻게 반영되는지 확인해야 하는 뉴스입니다."
     return f"{headline}입니다. 쉽게 말해 {subject} 쪽에서 {event}가 투자심리에 영향을 주는 뉴스입니다."
 
 
@@ -657,6 +687,8 @@ def korean_news_sentiment(title: str | NewsItem, description: str = "") -> tuple
         "leading",
         "best-performing",
         "demand",
+        "boom",
+        "powering",
     )
     negative_words = (
         "slump",
@@ -668,6 +700,9 @@ def korean_news_sentiment(title: str | NewsItem, description: str = "") -> tuple
         "downgrade",
         "risk",
         "fear",
+        "pain",
+        "blame",
+        "volatility",
         "tariff",
         "depleted",
         "battle",
@@ -685,10 +720,18 @@ def korean_news_sentiment(title: str | NewsItem, description: str = "") -> tuple
         "micron falls" in lower_text or "chip firms tumble" in lower_text
     ):
         return "혼재", "반도체 장기 테마는 살아 있어도 단기 과열 해소와 차익실현은 경계해야 합니다."
+    if ("sk hynix" in lower_text or "hynix" in lower_text or "imported volatility" in lower_text) and (
+        "micron" in lower_text or "chip stocks" in lower_text or "semiconductor" in lower_text
+    ):
+        return "부정", "메모리 공급망 변동성이 마이크론과 반도체주 차익실현으로 이어질 수 있어 단기 리스크가 큽니다."
     if "warsh" in lower_text and ("fed" in lower_text or "interest-rate" in lower_text):
         return "중립-", "금리 경로 힌트가 적으면 시장은 채권금리와 물가 지표에 더 민감해집니다."
     if "nasdaq-100" in lower_text and ("just 10 stocks" in lower_text or "10 stocks" in lower_text):
         return "혼재", "대형주 주도는 지수를 밀어 올리지만 시장 폭이 좁으면 조정에 취약합니다."
+    if "profit boom" in lower_text and (
+        "nvidia" in lower_text or "micron" in lower_text or "chip" in lower_text
+    ):
+        return "긍정", "AI 반도체 수요가 엔비디아와 마이크론 이익 기대를 키우는 내용이라 기술주 심리에 우호적입니다."
     if "meta" in lower_text and ("cloud" in lower_text or "compute" in lower_text):
         return "긍정", "AI 인프라 비용을 외부 매출로 바꾸려는 시도라 투자 부담 완화 신호입니다."
     if ("servicenow" in lower_text or "salesforce" in lower_text) and (

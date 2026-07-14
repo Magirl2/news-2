@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import re
 
 from .investment_plan import SECTOR_STOCKS
 from .market_data import MarketSnapshot, Quote, SECTOR_KO, fetch_yahoo_daily, format_change
@@ -62,6 +63,22 @@ SYMBOL_TO_SECTOR.update(
         "SMCI": "Technology",
     }
 )
+
+
+def _text_mentions_token(text: str, token: str) -> bool:
+    token = token.strip().lower()
+    if not token:
+        return False
+    if " " in token:
+        return token in text
+    return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", text) is not None
+
+
+def text_mentions_symbol_or_alias(text: str, symbol: str) -> bool:
+    lower_text = text.lower()
+    symbol = symbol.upper()
+    tokens = [symbol.lower(), *[alias.lower() for alias in SYMBOL_ALIASES.get(symbol, [])]]
+    return any(_text_mentions_token(lower_text, token) for token in tokens)
 
 
 @dataclass(frozen=True)
@@ -125,7 +142,6 @@ def _news_score_for_symbol(symbol: str, sector: str | None, news_items: list[New
     if not news_items:
         return 0, "관련 뉴스 확인 없음"
 
-    symbol_text = symbol.lower()
     name_text = SYMBOL_TO_NAME.get(symbol.upper(), "").lower()
     sector_to_labels = {
         "Technology": {"AI/반도체", "AI/클라우드", "소프트웨어", "실적", "시장"},
@@ -158,7 +174,9 @@ def _news_score_for_symbol(symbol: str, sector: str | None, news_items: list[New
         elif sentiment == "부정":
             points = -2
 
-        direct = symbol_text in text or bool(name_text and name_text in text)
+        direct = text_mentions_symbol_or_alias(text, symbol) or bool(
+            name_text and _text_mentions_token(text, name_text)
+        )
         if direct:
             direct_score += points
             direct_count += 1

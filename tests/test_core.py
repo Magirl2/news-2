@@ -219,6 +219,26 @@ class NewsSummaryTests(unittest.TestCase):
         self.assertIn("차익실현", reason)
         self.assertIn("마이크론", korean_news_headline(title))
 
+    def test_micron_sk_hynix_news_gets_specific_ai_risk_read(self) -> None:
+        title = "Micron and other chip stocks feel the pain of imported volatility — blame SK Hynix"
+        sentiment, reason = korean_news_sentiment(title)
+
+        self.assertEqual(korean_news_label(title), "AI/반도체")
+        self.assertEqual(sentiment, "부정")
+        self.assertIn("SK하이닉스", korean_news_headline(title))
+        self.assertIn("메모리", korean_news_plain_explanation(title))
+        self.assertIn("단기 리스크", reason)
+
+    def test_chip_profit_boom_is_ai_semiconductor_not_generic_earnings(self) -> None:
+        title = "Micron and Nvidia are powering a $700 billion chip profit boom: Chart of the Day"
+        sentiment, reason = korean_news_sentiment(title)
+
+        self.assertEqual(korean_news_label(title), "AI/반도체")
+        self.assertEqual(sentiment, "긍정")
+        self.assertIn("AI 반도체", korean_news_headline(title))
+        self.assertIn("이익 사이클", korean_news_plain_explanation(title))
+        self.assertIn("이익 기대", reason)
+
     def test_microsoft_layoffs_ai_gets_mixed_sentiment(self) -> None:
         item = NewsItem(
             title="Microsoft is reportedly planning thousands of layoffs as it spends on AI",
@@ -1363,6 +1383,33 @@ class NewsDecisionQualityTests(unittest.TestCase):
         self.assertEqual(_news_impact_classification(direct_item, [action])[0], "직접 영향")
         self.assertEqual(_news_impact_classification(indirect_item, [action])[0], "간접 영향")
         self.assertEqual(_news_impact_classification(reference_item, [action])[0], "참고만")
+
+    def test_short_ticker_does_not_match_inside_unrelated_words(self) -> None:
+        action = WatchlistAction(
+            symbol="MU",
+            sector="Technology",
+            close=100.0,
+            change_percent=0.0,
+            stance="중립",
+            check_price="$100.00 기준 방향 확인",
+            caution="관찰",
+            sector_text="기술 +0.00%",
+            relative_strength="섹터와 유사(+0.00%)",
+            news_impact="뉴스 영향 제한적",
+        )
+        item = NewsItem(
+            title="Trump proposes 20% toll on cargo through Strait of Hormuz; restarts Iran blockade",
+            description="Oil markets watch shipping risk.",
+            link="https://example.com/hormuz",
+            source="Example",
+            published="",
+            score=5,
+        )
+
+        impact, reason = _news_impact_classification(item, [action])
+
+        self.assertNotEqual(impact, "직접 영향")
+        self.assertNotIn("직접 언급", reason)
 
     def test_news_dashboard_summarizes_overall_news_read(self) -> None:
         snapshot = MarketSnapshot(

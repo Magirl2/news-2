@@ -40,7 +40,7 @@ from .earnings_calendar import build_earnings_calendar
 from .event_calendar import build_event_calendar
 from .professional_review import build_professional_review
 from .sec_filings import build_sec_filing_alert
-from .watchlist import SYMBOL_ALIASES, WatchlistAction, build_watchlist_actions, build_watchlist_review
+from .watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review, text_mentions_symbol_or_alias
 from .investment_plan import (
     build_investment_package,
     build_previous_signal_review,
@@ -485,9 +485,7 @@ def _news_impact_classification(
 ) -> tuple[str, str]:
     text = f"{item.title} {item.description}".lower()
     for action in watchlist_actions:
-        symbol = action.symbol.lower()
-        aliases = [alias.lower() for alias in SYMBOL_ALIASES.get(action.symbol, [])]
-        if symbol in text or any(alias and alias in text for alias in aliases):
+        if text_mentions_symbol_or_alias(text, action.symbol):
             return "직접 영향", f"관심종목 {action.symbol}가 뉴스에 직접 언급됐습니다."
 
     label = korean_news_label(item)
