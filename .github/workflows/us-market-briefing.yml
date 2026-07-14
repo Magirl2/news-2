@@ -2,6 +2,13 @@ name: US Market Kakao Briefing
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "market_briefing_bot/**"
+      - "tests/**"
+      - ".github/workflows/us-market-briefing.yml"
   schedule:
     # 07:10 KST. This is after the regular US market close in both standard time and daylight saving time.
     - cron: "10 22 * * 1-5"
