@@ -1147,8 +1147,13 @@ def _render_report_body_lines(lines: list[str]) -> str:
         header = table_rows[0]
         body = table_rows[1:]
         head_html = "".join(f"<th>{html.escape(cell)}</th>" for cell in header)
+
+        def td_html(index: int, cell: str) -> str:
+            label = header[index] if index < len(header) else ""
+            return f'<td data-label="{html.escape(label, quote=True)}">{_report_cell_html(cell)}</td>'
+
         body_html = "".join(
-            "<tr>" + "".join(f"<td>{_report_cell_html(cell)}</td>" for cell in row) + "</tr>"
+            "<tr>" + "".join(td_html(index, cell) for index, cell in enumerate(row)) + "</tr>"
             for row in body
         )
         html_parts.append(
@@ -1362,17 +1367,21 @@ def _write_html_report(
       --blue: #2454a6;
       --green: #0f7b3b;
       --red: #b42318;
+      --page-x: 18px;
+      --panel-pad: 22px;
+      --section-gap: 16px;
     }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: Arial, 'Malgun Gothic', sans-serif; background: var(--bg); color: var(--ink); }}
-    main {{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 56px; }}
-    .hero {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; margin-bottom: 18px; }}
+    html {{ -webkit-text-size-adjust: 100%; }}
+    body {{ margin: 0; font-family: Arial, 'Malgun Gothic', sans-serif; background: var(--bg); color: var(--ink); overflow-x: hidden; }}
+    main {{ width: 100%; max-width: 1120px; margin: 0 auto; padding: 28px var(--page-x) 56px; }}
+    .hero {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; margin-bottom: var(--section-gap); }}
     .eyebrow {{ margin: 0 0 8px; color: var(--blue); font-size: 13px; font-weight: 700; }}
     h1 {{ margin: 0; font-size: clamp(26px, 4vw, 42px); line-height: 1.15; letter-spacing: 0; }}
     .market-line {{ margin-top: 16px; font-size: 18px; font-weight: 700; }}
     .one-line {{ margin: 8px 0 0; color: var(--muted); font-size: 16px; line-height: 1.55; }}
     h2 {{ margin: 28px 0 12px; font-size: 21px; line-height: 1.3; letter-spacing: 0; }}
-    .quick-summary {{ background: #111827; color: #fff; border-radius: 8px; padding: 22px; margin: 18px 0; }}
+    .quick-summary {{ background: #111827; color: #fff; border-radius: 8px; padding: var(--panel-pad); margin: var(--section-gap) 0; }}
     .quick-summary .eyebrow {{ color: #93c5fd; margin-bottom: 6px; }}
     .quick-head h2 {{ margin: 0 0 6px; font-size: 24px; }}
     .quick-head p:last-child {{ margin: 0; color: #cbd5e1; line-height: 1.5; }}
@@ -1409,7 +1418,7 @@ def _write_html_report(
     .score-parts span {{ display: block; background: #f2f4f7; border-radius: 6px; padding: 7px 5px; text-align: center; color: #475467; font-size: 12px; }}
     .score-parts b {{ display: block; margin-top: 2px; color: #111827; font-size: 15px; }}
     .sector-score small {{ display: block; color: #475467; }}
-    .charts-section {{ margin: 20px 0; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }}
+    .charts-section {{ margin: var(--section-gap) 0; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: var(--panel-pad); }}
     .charts-head h2 {{ margin: 0 0 6px; }}
     .charts-head p {{ margin: 0 0 14px; color: var(--muted); line-height: 1.5; }}
     .chart-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }}
@@ -1422,7 +1431,7 @@ def _write_html_report(
     .chart-card small {{ display: block; color: #667085; font-size: 12px; margin-top: 6px; }}
     .chart-placeholder {{ display: flex; align-items: center; justify-content: center; min-height: 96px; background: #f2f4f7; border-radius: 6px; color: #667085; text-align: center; padding: 10px; }}
     .chart-missing {{ border-style: dashed; background: #fff; }}
-    .news-dashboard {{ margin-top: 20px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 20px; }}
+    .news-dashboard {{ margin-top: var(--section-gap); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: var(--panel-pad); }}
     .dashboard-head {{ display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }}
     .dashboard-head h2 {{ margin: 0 0 5px; }}
     .dashboard-head p {{ margin: 0; color: var(--muted); line-height: 1.5; }}
@@ -1439,7 +1448,7 @@ def _write_html_report(
     .priority-news ol {{ margin: 8px 0 0; padding-left: 20px; }}
     .priority-news li {{ margin: 6px 0; line-height: 1.5; }}
     .news-list {{ display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0; padding: 0; list-style: none; }}
-    .news-list li {{ border: 1px solid #e1e5ec; border-radius: 8px; padding: 16px; background: #fff; line-height: 1.55; }}
+    .news-list li {{ border: 1px solid #e1e5ec; border-radius: 8px; padding: 16px; background: #fff; line-height: 1.55; overflow-wrap: anywhere; }}
     .news-list strong {{ display: block; margin-bottom: 8px; font-size: 17px; }}
     .news-list span {{ display: block; margin: 5px 0; color: #344054; }}
     .news-list b {{ color: #1d2939; }}
@@ -1459,7 +1468,7 @@ def _write_html_report(
     .signal-block li {{ margin: 4px 0; padding: 0; border: 0; border-radius: 0; background: transparent; line-height: 1.45; }}
     a {{ color: var(--blue); text-decoration: none; font-weight: 700; }}
     .report-flow {{ display: grid; gap: 0; }}
-    .report-section {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 22px; margin-top: 16px; line-height: 1.65; }}
+    .report-section {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: var(--panel-pad); margin-top: var(--section-gap); line-height: 1.65; overflow-wrap: anywhere; }}
     .report-section h2 {{ margin-top: 0; }}
     .report-section p {{ margin: 8px 0; }}
     .report-heading {{ background: #111827; color: #fff; border-color: #111827; }}
@@ -1489,14 +1498,85 @@ def _write_html_report(
     .key-line strong {{ display: inline-block; min-width: 86px; color: #344054; }}
     footer {{ margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }}
     @media (max-width: 680px) {{
-      main {{ padding: 18px 12px 44px; }}
-      .hero, .report-section {{ padding: 18px; }}
-      .quick-summary {{ padding: 18px; }}
-      .three-lines, .quick-split {{ grid-template-columns: 1fr; }}
-      .sector-score-grid {{ grid-template-columns: 1fr; }}
+      :root {{
+        --page-x: 10px;
+        --panel-pad: 14px;
+        --section-gap: 10px;
+      }}
+      main {{ padding-top: 10px; padding-bottom: 36px; }}
+      .hero, .quick-summary, .charts-section, .news-dashboard, .report-section, .news-list li {{
+        border-radius: 8px;
+        padding: var(--panel-pad);
+      }}
+      .hero {{ margin-bottom: var(--section-gap); }}
+      h1 {{ font-size: 25px; line-height: 1.2; }}
+      h2 {{ margin: 20px 0 10px; font-size: 19px; }}
+      .quick-head h2 {{ margin-top: 0; font-size: 21px; }}
+      .three-lines, .quick-split, .grid, .sector-score-grid, .chart-grid, .dashboard-grid {{
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }}
+      .watch-actions ul {{ grid-template-columns: 1fr; }}
+      .sector, .sector-score, .chart-card, .dashboard-grid div, .dashboard-action, .priority-news, .signal-block {{
+        border-radius: 8px;
+        padding: 12px;
+      }}
+      .score-parts {{ grid-template-columns: repeat(2, 1fr); }}
       .dashboard-head {{ display: block; }}
       .read-badge {{ margin-bottom: 10px; }}
       .market-line {{ font-size: 16px; }}
+      .one-line, .quick-head p:last-child, .charts-head p, .dashboard-head p, .report-section {{
+        line-height: 1.58;
+      }}
+      .news-list strong {{ font-size: 16px; line-height: 1.35; }}
+      .news-list .importance-line, .news-list .impact-line {{ align-items: flex-start; }}
+      .report-decision, .report-event, .report-tracking, .report-positive, .report-negative {{
+        border-left-width: 4px;
+      }}
+      .report-list {{ padding-left: 17px; }}
+      .key-line strong {{ display: block; min-width: 0; margin-bottom: 2px; }}
+      .report-table-wrap {{
+        overflow-x: visible;
+        border: 0;
+        background: transparent;
+        margin: 10px 0 12px;
+      }}
+      .report-table {{
+        display: block;
+        min-width: 0;
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 13px;
+      }}
+      .report-table thead {{ display: none; }}
+      .report-table tbody, .report-table tr, .report-table td {{ display: block; width: 100%; }}
+      .report-table tr {{
+        margin-bottom: 10px;
+        border: 1px solid #e4e7ec;
+        border-radius: 8px;
+        background: #fff;
+        overflow: hidden;
+      }}
+      .report-table td {{
+        display: grid;
+        grid-template-columns: minmax(92px, 38%) 1fr;
+        gap: 8px;
+        padding: 9px 10px;
+        border-bottom: 1px solid #edf0f5;
+      }}
+      .report-table td:last-child {{ border-bottom: 0; }}
+      .report-table td::before {{
+        content: attr(data-label);
+        color: #667085;
+        font-weight: 800;
+        overflow-wrap: anywhere;
+      }}
+      .report-badge, .importance-badge, .impact-badge {{
+        white-space: normal;
+        text-align: left;
+        line-height: 1.2;
+      }}
     }}
   </style>
 </head>

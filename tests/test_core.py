@@ -995,7 +995,8 @@ class HtmlReportTests(unittest.TestCase):
 
         self.assertIn('class="report-table"', rendered)
         self.assertIn("<th>종목</th>", rendered)
-        self.assertIn("<td>AMD</td>", rendered)
+        self.assertIn('data-label=', rendered)
+        self.assertIn(">AMD</td>", rendered)
 
     def test_investment_action_and_grade_cells_render_as_badges(self) -> None:
         rendered = _render_report_sections(
