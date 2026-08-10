@@ -433,14 +433,18 @@ def _entry_validation_score(metrics: dict, strategy: dict, trigger: str) -> int:
     elif trigger == "BREAKOUT_PROXY":
         score += 18
     if volume_ratio is None:
-        score -= 10
+        score -= 18
     elif volume_ratio >= 2.0:
         score += 22
     elif volume_ratio >= 1.5:
         score += 18
     elif volume_ratio >= 1.2:
         score += 14
+    elif volume_ratio >= 1.0:
+        score += 4
     elif volume_ratio < 0.8:
+        score -= 26
+    else:
         score -= 18
     if ma20_distance is not None and ma20_distance > 5:
         score -= 28
@@ -455,7 +459,7 @@ def _overall_validation_score(news_score: int, trend_score: int, position_score:
 
 def _state_label(state: str) -> str:
     labels = {
-        "ENTRY_READY": "진입 후보",
+        "ENTRY_READY": "오늘 진입 검토",
         "WATCH_PULLBACK": "눌림 관찰",
         "WATCH_RECLAIM": "20일선 회복 대기",
         "CHASE_RISK": "과이격/추격주의",
@@ -477,10 +481,16 @@ def _recommendation_state(
 ) -> tuple[str, str, str]:
     ma20_distance = metrics["ma20_distance_percent"]
     recent_5_change = metrics["recent_5_change_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    stop_pct = strategy["stop_loss_percent"]
+    ratio = risk_plan["risk_reward_ratio"]
     overextended = (ma20_distance is not None and ma20_distance > 5) or (
         recent_5_change is not None and recent_5_change >= 10
     )
-    if strategy["action"] == "?쒖쇅":
+    insufficient_volume = volume_ratio is None or volume_ratio < 1.0
+    weak_risk_reward = ratio is None or ratio < 1.5
+    wide_stop = stop_pct is None or stop_pct > 5
+    if strategy["action"] == "제외":
         state = "EXCLUDED"
         warning = "비선호 후보로 분류되어 신규 진입 검증 대상에서 제외합니다."
     elif overextended:
@@ -492,15 +502,27 @@ def _recommendation_state(
     elif ma20_distance is not None and ma20_distance < -2:
         state = "WATCH_RECLAIM"
         warning = "20일선 아래에 있어 회복과 지지 확인이 먼저입니다."
+    elif strategy["start_entry_price"] is not None and insufficient_volume:
+        state = "WATCH_PULLBACK"
+        warning = "가격 위치는 나쁘지 않지만 거래량이 평균 미만이라 오늘 진입 후보에서 제외하고 확인 후보로 낮춥니다."
+    elif strategy["start_entry_price"] is not None and weak_risk_reward:
+        state = "WATCH_PULLBACK"
+        warning = "진입은 가까워 보이지만 손익비가 1.5R 미만이라 상단 진입 후보에서는 제외합니다."
+    elif strategy["start_entry_price"] is not None and wide_stop:
+        state = "WATCH_PULLBACK"
+        warning = "손절폭이 넓어 현재가 기준 비중 진입보다 더 가까운 지지 확인이 필요합니다."
     elif (
         strategy["start_entry_price"] is not None
         and risk_plan["max_start_weight_percent"] > 0
         and trend_score >= 65
         and position_score >= 60
         and entry_score >= 60
+        and not insufficient_volume
+        and not weak_risk_reward
+        and not wide_stop
     ):
         state = "ENTRY_READY"
-        warning = "뉴스 후보가 Daily 추세와 현재 위치 검증을 통과했습니다. 장중 가격/거래량 재확인이 필요합니다."
+        warning = "뉴스, 추세, 20일선 위치, 거래량, 손익비가 최소 기준을 통과했습니다. 장중 가격 유지 여부를 재확인하세요."
     elif trend_score >= 65 and position_score < 60:
         state = "WATCH_PULLBACK"
         warning = "종목과 추세는 강하지만 현재 위치가 덜 유리해 눌림 확인이 우선입니다."
@@ -623,8 +645,12 @@ def _today_attractiveness(metrics: dict, sector_quote: Quote, news_score: float)
             score += 18
         elif volume_ratio >= 1.2:
             score += 14
+        elif volume_ratio >= 1.0:
+            score += 4
         elif volume_ratio < 0.8:
-            score -= 15
+            score -= 22
+        else:
+            score -= 12
     else:
         score -= 10
     if sector_quote.change_percent > 0:
@@ -657,7 +683,7 @@ def _classify_interest(metrics: dict, today_score: int) -> tuple[str, str]:
     if ma50_distance is not None and ma50_distance < 0:
         return "관망형", "50일선 회복 전 관망"
     if ma20_distance is not None and -2 <= ma20_distance <= 5:
-        if volume_ratio is None:
+        if volume_ratio is None or volume_ratio < 1.0:
             return "거래량 부족형", "거래량 확인 필요"
         if volume_ratio >= 1.2 and today_score >= 70:
             return "20일선 지지 확인형", "오늘 확인 후보"
@@ -744,7 +770,7 @@ def _risk_reward_analysis(metrics: dict, strategy: dict, chart_grade: str) -> di
     start_weight = strategy["start_weight_percent"]
     near_ma20 = ma20_distance is not None and -2 <= ma20_distance <= 5
     good_volume = volume_ratio is not None and volume_ratio >= 1.2
-    low_volume = volume_ratio is None or volume_ratio < 0.8
+    low_volume = volume_ratio is None or volume_ratio < 1.0
     clear_stop = stop_pct is not None and stop_pct <= 4
     mode = "작게만 가능"
     max_weight = min(15, start_weight)
@@ -752,7 +778,7 @@ def _risk_reward_analysis(metrics: dict, strategy: dict, chart_grade: str) -> di
     if action in {"추격 금지", "제외"} or start_price is None or start_weight == 0 or (stop_pct is not None and stop_pct >= 7):
         mode = "진입 부적합"
         max_weight = 0
-    elif ratio is not None and ratio < 1.0:
+    elif ratio is None or ratio < 1.5:
         mode = "진입 부적합"
         max_weight = 0
     elif ratio is not None and ratio >= 2.0 and clear_stop and good_volume and near_ma20 and chart_grade in {"A", "B"}:
@@ -821,7 +847,8 @@ def _entry_strategy(metrics: dict, sector_quote: Quote, today_score: int) -> dic
     is_near_ma20 = ma20_distance is not None and -2 <= ma20_distance <= 5
     is_extended = ma20_distance is not None and 5 < ma20_distance < 8
     has_good_volume = volume_ratio is not None and volume_ratio >= 1.2
-    has_low_volume = volume_ratio is None or volume_ratio < 0.8
+    has_confirmed_volume = volume_ratio is not None and volume_ratio >= 1.0
+    has_low_volume = volume_ratio is None or volume_ratio < 1.0
 
     if is_chase:
         setup_type = "추격 위험형"
@@ -854,14 +881,22 @@ def _entry_strategy(metrics: dict, sector_quote: Quote, today_score: int) -> dic
         entry_risk = "장 초반 급등하면 바로 추격 구간이 될 수 있어 시작 비중은 작게 잡아야 합니다."
     elif is_near_ma20:
         setup_type = "20일선 근접 확인형"
-        action = "지금은 1차 진입만 가능"
-        start_weight = 10 if has_low_volume else 15
-        start_price = close
+        action = "지금은 1차 진입만 가능" if has_confirmed_volume else "거래량 확인 후 가능"
+        start_weight = 10 if has_confirmed_volume else 0
+        start_price = close if has_confirmed_volume else None
         add_price = max(previous_high * 1.002, close * 1.006)
         confirm_price = max(recent_high * 1.001, close * 1.015)
         add_condition = f"{_money(add_price)} 회복과 거래량 1.2배 이상 확인"
-        can_enter_reason = "20일선과 가격 거리는 나쁘지 않아 아주 작은 1차 관찰 비중은 가능합니다."
-        entry_risk = "거래량 확인이 부족해 가격만 보고 비중을 키우면 흔들림에 약합니다."
+        can_enter_reason = (
+            "20일선과 가격 거리는 나쁘지 않아 작은 1차 관찰 비중은 가능합니다."
+            if has_confirmed_volume
+            else "가격 위치는 좋지만 거래량이 평균 미만이라 지금 진입보다 확인이 먼저입니다."
+        )
+        entry_risk = (
+            "거래량이 충분히 강하지 않아 가격만 보고 비중을 키우면 흔들림에 약합니다."
+            if has_confirmed_volume
+            else "거래량이 평균 미만이면 지지가 약해 작은 반등도 실패 신호가 될 수 있습니다."
+        )
     elif is_extended:
         setup_type = "눌림 대기형"
         action = "눌림 확인 후 가능"
@@ -1195,12 +1230,101 @@ def _format_target(plan: StockPlan) -> str:
     return _money_or_none(plan.first_target_price)
 
 
+def _is_entry_candidate(plan: StockPlan) -> bool:
+    volume_ok = plan.volume_ratio is not None and plan.volume_ratio >= 1.0
+    risk_ok = plan.risk_reward_ratio is not None and plan.risk_reward_ratio >= 1.5
+    stop_ok = plan.stop_loss_percent is not None and plan.stop_loss_percent <= 5
+    return (
+        plan.recommendation_state == "ENTRY_READY"
+        and plan.start_weight_percent > 0
+        and plan.start_entry_price is not None
+        and volume_ok
+        and risk_ok
+        and stop_ok
+    )
+
+
+def _plan_priority_score(plan: StockPlan) -> float:
+    score = float(plan.overall_score)
+    if _is_entry_candidate(plan):
+        score += 180
+    elif plan.recommendation_state in {"WATCH_PULLBACK", "WATCH_RECLAIM"}:
+        score += 40
+    elif plan.recommendation_state == "CHASE_RISK":
+        score -= 90
+    elif plan.recommendation_state in {"TREND_WEAK", "EXCLUDED"}:
+        score -= 120
+
+    if plan.ma20_distance_percent is not None:
+        if -2 <= plan.ma20_distance_percent <= 5:
+            score += 28
+        elif 5 < plan.ma20_distance_percent <= 8:
+            score -= 35
+        elif plan.ma20_distance_percent > 8:
+            score -= 70
+        elif plan.ma20_distance_percent < -2:
+            score -= 20
+
+    if plan.volume_ratio is None:
+        score -= 30
+    elif plan.volume_ratio >= 1.2:
+        score += 35
+    elif plan.volume_ratio >= 1.0:
+        score += 8
+    else:
+        score -= 45
+
+    if plan.risk_reward_ratio is None:
+        score -= 25
+    elif plan.risk_reward_ratio >= 2.0:
+        score += 35
+    elif plan.risk_reward_ratio >= 1.5:
+        score += 18
+    else:
+        score -= 55
+
+    if plan.stop_loss_percent is None:
+        score -= 20
+    elif plan.stop_loss_percent <= 4:
+        score += 20
+    elif plan.stop_loss_percent <= 5:
+        score += 8
+    elif plan.stop_loss_percent >= 7:
+        score -= 60
+    else:
+        score -= 25
+    return score
+
+
+def _entry_candidates(plans: list[StockPlan]) -> list[StockPlan]:
+    return [plan for plan in plans if _is_entry_candidate(plan)]
+
+
+def _watch_candidates(plans: list[StockPlan]) -> list[StockPlan]:
+    return [
+        plan
+        for plan in plans
+        if not _is_entry_candidate(plan)
+        and plan.recommendation_state in {"WATCH_PULLBACK", "WATCH_RECLAIM", "TREND_WEAK"}
+    ]
+
+
+def _chase_candidates(plans: list[StockPlan]) -> list[StockPlan]:
+    return [plan for plan in plans if plan.recommendation_state == "CHASE_RISK"]
+
+
 def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
-    top_plans = plans[:limit]
+    top_plans = _entry_candidates(plans)[:limit]
     if not top_plans:
-        return "오늘 바로 볼 종목 TOP 5\n데이터 부족으로 후보를 만들지 못했습니다."
+        return "\n".join(
+            [
+                "오늘 진입 검토 TOP 5",
+                "현재 기준으로 바로 진입 검토할 후보가 없습니다.",
+                "거래량, 손익비, 손절폭 중 하나라도 부족하면 상단 후보에서 제외하고 관찰 후보로만 둡니다.",
+            ]
+        )
     lines = [
-        "오늘 바로 볼 종목 TOP 5",
+        "오늘 진입 검토 TOP 5",
         "|종목|검증 상태|N/T/P/E|지금 진입 가능 여부|비중 판단|시작 비중|손익비|시작 진입가|추가 진입가|확인 진입가|무효화 가격|1차 목표가|한 줄 이유|",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
@@ -1290,6 +1414,12 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
             f"   점수 이유: {', '.join(dict.fromkeys(plan.score_reasons))}",
         ])
     return "\n".join(lines)
+
+
+def _format_optional_plan_list(title: str, plans: list[StockPlan]) -> str:
+    if not plans:
+        return ""
+    return _format_plan_list(title, plans)
 
 
 def _plan_signal(plan: StockPlan, target_date: date) -> dict[str, Any]:
@@ -1390,21 +1520,28 @@ def build_investment_package(snapshot: MarketSnapshot, sectors: list[Quote], new
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"{symbol} 비선호 후보 계산 실패: {exc}")
 
-    interest_plans.sort(key=lambda plan: plan.score, reverse=True)
+    interest_plans.sort(key=_plan_priority_score, reverse=True)
     avoid_plans.sort(key=lambda plan: plan.score, reverse=True)
     strong_names = ", ".join(f"{SECTOR_KO.get(quote.name, quote.name)} {format_change(quote.change_percent)}" for quote in strong_sectors)
     weak_names = ", ".join(f"{SECTOR_KO.get(quote.name, quote.name)} {format_change(quote.change_percent)}" for quote in weak_sectors)
-    text = "\n\n".join([
+    entry_plans = _entry_candidates(interest_plans)
+    watch_plans = _watch_candidates(interest_plans)
+    chase_plans = _chase_candidates(interest_plans)
+    sections = [
         "투자 액션 보고서",
         "유의 섹터\n"
         f"- 강하게 볼 섹터: {strong_names}\n"
         f"- 조심할 섹터: {weak_names}\n"
-        "- 원칙: 종목 추천보다 진입 전략을 봅니다. 시작 비중은 작게, 추가 진입은 가격과 거래량 확인 후 판단합니다.",
+        "- 원칙: 뉴스가 좋아도 거래량, 20일선 위치, 손익비, 손절폭이 맞지 않으면 진입 후보로 올리지 않습니다.\n"
+        "- 상단 TOP 5는 관심종목이 아니라 오늘 실제 진입 검토가 가능한 후보만 보여줍니다.",
         _format_top_action_table(interest_plans),
-        _format_plan_list("관심 후보", interest_plans),
+        _format_optional_plan_list("오늘 진입 검토 후보", entry_plans),
+        _format_optional_plan_list("관찰 후보", watch_plans),
+        _format_optional_plan_list("추격 위험 후보", chase_plans),
         _format_plan_list("비선호 후보", avoid_plans),
         "주의\n개인 맞춤 투자자문이 아니라 규칙 기반 시장 참고자료입니다. 실제 주문 전 호가, 거래량, 실적 일정, 뉴스 원문을 다시 확인하세요.",
-    ])
+    ]
+    text = "\n\n".join(section for section in sections if section)
     return InvestmentPackage(
         text=text,
         warnings=warnings,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import json
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -55,6 +56,7 @@ from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
 from market_briefing_bot.watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
 from market_briefing_bot.investment_plan import (
+    _format_top_action_table,
     _interest_plan,
     _risk_reward_analysis,
     build_investment_package,
@@ -652,9 +654,9 @@ class InvestmentPlanTests(unittest.TestCase):
             report, warnings = build_investment_report(snapshot, sectors, news)
         self.assertFalse(warnings)
         self.assertIn("유의 섹터", report)
-        self.assertIn("관심 후보", report)
+        self.assertIn("관찰 후보", report)
         self.assertIn("비선호 후보", report)
-        self.assertIn("오늘 바로 볼 종목 TOP 5", report)
+        self.assertIn("오늘 진입 검토 TOP 5", report)
         self.assertIn("지금 진입 가능 여부", report)
         self.assertIn("비중 판단", report)
         self.assertIn("손익비", report)
@@ -713,7 +715,44 @@ class InvestmentPlanTests(unittest.TestCase):
 
         self.assertEqual(weak.volume_status, "거래량 부족")
         self.assertLess(weak.today_score, strong.today_score)
-        self.assertLessEqual(weak.start_weight_percent, 10)
+        self.assertEqual(weak.entry_action, "거래량 확인 후 가능")
+        self.assertEqual(weak.position_mode, "진입 부적합")
+        self.assertEqual(weak.start_weight_percent, 0)
+        self.assertIsNone(weak.start_entry_price)
+        self.assertNotEqual(weak.recommendation_state, "ENTRY_READY")
+
+    def test_top_action_table_only_shows_entry_ready_candidates(self) -> None:
+        base = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=1400.0))
+        entry_ready = replace(
+            base,
+            symbol="GOOD",
+            name="Good",
+            recommendation_state="ENTRY_READY",
+            recommendation_label="오늘 진입 검토",
+            start_weight_percent=35,
+            start_entry_price=base.close,
+            volume_ratio=1.3,
+            risk_reward_ratio=2.0,
+            stop_loss_percent=2.0,
+        )
+        watch_only = replace(
+            base,
+            symbol="WAIT",
+            name="Wait",
+            recommendation_state="WATCH_PULLBACK",
+            recommendation_label="눌림 관찰",
+            start_weight_percent=0,
+            start_entry_price=None,
+            volume_ratio=0.7,
+            risk_reward_ratio=2.0,
+            stop_loss_percent=2.0,
+        )
+
+        text = _format_top_action_table([watch_only, entry_ready])
+
+        self.assertIn("오늘 진입 검토 TOP 5", text)
+        self.assertIn("Good(GOOD)", text)
+        self.assertNotIn("Wait(WAIT)", text)
 
     def test_breaking_below_20_day_average_is_wait_and_see(self) -> None:
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=94.0, last_volume=1200.0))
@@ -834,7 +873,7 @@ class InvestmentPlanTests(unittest.TestCase):
         with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
             report, _warnings = build_investment_report(snapshot, sectors, [])
 
-        self.assertEqual(report.count("오늘 바로 볼 종목 TOP 5"), 1)
+        self.assertEqual(report.count("오늘 진입 검토 TOP 5"), 1)
         self.assertNotIn("매수 근거:", report)
         self.assertNotIn("손절 근거:", report)
 
