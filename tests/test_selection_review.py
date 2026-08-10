@@ -155,6 +155,23 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(results[0].symbol, "AMD")
         self.assertEqual(results[0].outcome, "TARGET_FIRST")
 
+    def test_generic_interest_bucket_is_marked_as_old_watchlist(self) -> None:
+        signal = {
+            "date": "2026-07-01",
+            "symbol": "XOM",
+            "close": 100,
+            "invalidation_price": 95,
+            "first_target_price": 110,
+            "stance": "관심 후보",
+        }
+        rows = [_row(1, 100), _row(2, 103), _row(3, 105)]
+
+        result = evaluate_signal(signal, "interest", rows, horizon=5)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.bucket, "구버전 관심목록(진입 기준 없음)")
+
     def test_render_selection_review_includes_summary_and_detail(self) -> None:
         signal = {
             "date": "2026-07-01",
@@ -173,6 +190,7 @@ class SelectionReviewTests(unittest.TestCase):
 
         self.assertIn("전체 요약", text)
         self.assertIn("ENTRY_READY", text)
+        self.assertIn("진입/관망 판정이 있는 표본 수", text)
         self.assertIn("목표 먼저", text)
         self.assertIn("AMD", text)
 

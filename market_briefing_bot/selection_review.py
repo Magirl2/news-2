@@ -78,9 +78,15 @@ def _signal_bucket(signal: dict[str, Any], section: str) -> str:
     position_mode = str(signal.get("position_mode") or "").strip()
     if entry_action and position_mode:
         return f"{entry_action} / {position_mode}"
+    if entry_action in {"관심 후보", "비선호 후보"}:
+        return "구버전 관심목록(진입 기준 없음)" if section == "interest" else "구버전 비선호목록(진입 기준 없음)"
     if entry_action:
         return entry_action
-    return "관심 후보" if section == "interest" else "비선호 후보"
+    return "구버전 관심목록(진입 기준 없음)" if section == "interest" else "구버전 비선호목록(진입 기준 없음)"
+
+
+def _is_unclassified_bucket(bucket: str) -> bool:
+    return bucket.startswith("구버전 ")
 
 
 def _reference_price(signal: dict[str, Any]) -> float | None:
@@ -334,6 +340,7 @@ def render_selection_review(evaluations: list[SignalEvaluation], warnings: list[
         "",
         "이 검증은 과거 보고서에 남은 후보가 이후 며칠 동안 실제로 유효했는지 확인하는 1차 표본 점검입니다.",
         "기준가는 보고서의 시작 진입가가 있으면 그 가격을 쓰고, 없으면 당시 종가를 씁니다.",
+        "`구버전 관심목록`은 사용자가 넣은 관심종목 또는 옛 보고서 후보군이라 추천 로직 성과로 해석하지 않습니다.",
         "",
     ]
     if warnings:
@@ -347,17 +354,21 @@ def render_selection_review(evaluations: list[SignalEvaluation], warnings: list[
         lines.append("검증 가능한 표본이 아직 없습니다.")
         return "\n".join(lines)
 
-    target_first = sum(1 for item in evaluations if item.outcome == "TARGET_FIRST")
-    stop_first = sum(1 for item in evaluations if item.outcome == "STOP_FIRST")
-    avg_5d = _avg(item.returns.get(5) for item in evaluations)
-    avg_10d = _avg(item.returns.get(10) for item in evaluations)
-    avg_r = _avg(item.r_result for item in evaluations)
-    positive_5d = _positive_ratio(item.returns.get(5) for item in evaluations)
+    classified = [item for item in evaluations if not _is_unclassified_bucket(item.bucket)]
+    summary_base = classified or evaluations
+    target_first = sum(1 for item in summary_base if item.outcome == "TARGET_FIRST")
+    stop_first = sum(1 for item in summary_base if item.outcome == "STOP_FIRST")
+    avg_5d = _avg(item.returns.get(5) for item in summary_base)
+    avg_10d = _avg(item.returns.get(10) for item in summary_base)
+    avg_r = _avg(item.r_result for item in summary_base)
+    positive_5d = _positive_ratio(item.returns.get(5) for item in summary_base)
     lines.extend(
         [
             "## 전체 요약",
             "",
-            f"- 표본 수: {len(evaluations)}개",
+            f"- 전체 표본 수: {len(evaluations)}개",
+            f"- 진입/관망 판정이 있는 표본 수: {len(classified)}개",
+            f"- 구버전 관심/비선호 목록 표본 수: {len(evaluations) - len(classified)}개",
             f"- 1차 목표가 먼저 닿은 표본: {target_first}개",
             f"- 무효화 가격이 먼저 깨진 표본: {stop_first}개",
             f"- 평균 5거래일 수익률: {_percent(avg_5d)}",
@@ -365,9 +376,9 @@ def render_selection_review(evaluations: list[SignalEvaluation], warnings: list[
             f"- 5거래일 플러스 비율: {'-' if positive_5d is None else f'{positive_5d:.1f}%'}",
             f"- 평균 R 결과: {_r_text(avg_r)}",
             "",
-            "## 기준별 요약",
+            "## 판정별 요약",
             "",
-            "|기준|표본|목표 먼저|무효화 먼저|평균 5D|평균 10D|평균 R|5D 플러스|",
+            "|판정|표본|목표 먼저|무효화 먼저|평균 5D|평균 10D|평균 R|5D 플러스|",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -398,7 +409,7 @@ def render_selection_review(evaluations: list[SignalEvaluation], warnings: list[
             "",
             "## 표본 상세",
             "",
-            "|날짜|구분|종목|기준가|1D|3D|5D|10D|SPY 대비 5D|최대 유리|최대 불리|결과|R|",
+            "|날짜|판정|종목|기준가|1D|3D|5D|10D|SPY 대비 5D|최대 유리|최대 불리|결과|R|",
             "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|",
         ]
     )
@@ -433,6 +444,7 @@ def render_selection_review(evaluations: list[SignalEvaluation], warnings: list[
             "- `목표 먼저`가 많고 평균 R이 플러스면 해당 기준은 유지할 가치가 큽니다.",
             "- `무효화 먼저`가 많으면 그 기준은 진입 기준을 더 엄격하게 바꿔야 합니다.",
             "- 5D 수익률이 플러스여도 SPY 대비가 낮으면 종목 선정 효과가 약한 것입니다.",
+            "- `구버전 관심목록`은 사용자가 넣은 후보군 성격이 섞여 있어 추천 기준 검증에서 분리해서 봅니다.",
             "- 표본이 30개 미만이면 결론보다 방향성 확인용으로만 봐야 합니다.",
         ]
     )
