@@ -318,7 +318,7 @@ def _risk_card(snapshot: MarketSnapshot) -> str:
 
 def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[NewsItem]) -> str:
     regime, action = _risk_regime(snapshot)
-    strong = _sector_line(sectors[:2], count=2) if sectors else "확인 불가"
+    strong = _sector_line(sectors[:3], count=3) if sectors else "확인 불가"
     weak = _sector_line(list(reversed(sectors[-2:])), count=2) if sectors else "확인 불가"
     theme = _theme_from_snapshot(snapshot, news_items)
     return (
@@ -333,7 +333,7 @@ def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[Ne
 
 def _quick_takeaways(snapshot: MarketSnapshot, sectors: list, news_items: list[NewsItem]) -> list[tuple[str, str]]:
     regime, action = _risk_regime(snapshot)
-    strong = _sector_line(sectors[:2], count=2) if sectors else "확인 불가"
+    strong = _sector_line(sectors[:3], count=3) if sectors else "확인 불가"
     weak = _sector_line(list(reversed(sectors[-2:])), count=2) if sectors else "확인 불가"
     theme = _theme_from_snapshot(snapshot, news_items)
     return [

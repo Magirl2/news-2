@@ -1501,7 +1501,7 @@ def build_investment_package(snapshot: MarketSnapshot, sectors: list[Quote], new
         text = "투자 액션 보고서\n섹터 데이터가 없어 종목 후보를 만들지 못했습니다."
         return InvestmentPackage(text=text, warnings=warnings, interest_plans=[], avoid_plans=[], signals=_signals(snapshot.target_date, [], []))
 
-    strong_sectors = sectors[:2]
+    strong_sectors = sectors[:3]
     weak_sectors = list(reversed(sectors[-2:]))
     interest_plans: list[StockPlan] = []
     avoid_plans: list[StockPlan] = []
@@ -1532,6 +1532,7 @@ def build_investment_package(snapshot: MarketSnapshot, sectors: list[Quote], new
         "유의 섹터\n"
         f"- 강하게 볼 섹터: {strong_names}\n"
         f"- 조심할 섹터: {weak_names}\n"
+        "- 후보 범위: 전일 가장 강했던 상위 3개 섹터 안에서만 종목을 찾습니다.\n"
         "- 원칙: 뉴스가 좋아도 거래량, 20일선 위치, 손익비, 손절폭이 맞지 않으면 진입 후보로 올리지 않습니다.\n"
         "- 상단 TOP 5는 관심종목이 아니라 오늘 실제 진입 검토가 가능한 후보만 보여줍니다.",
         _format_top_action_table(interest_plans),

@@ -754,6 +754,30 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("Good(GOOD)", text)
         self.assertNotIn("Wait(WAIT)", text)
 
+    def test_investment_package_scans_top_three_strong_sectors(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 2),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        sectors = [
+            Quote("Technology", "XLK", date(2026, 7, 2), 100, 98, 2.0, "test"),
+            Quote("Financials", "XLF", date(2026, 7, 2), 100, 98.5, 1.5, "test"),
+            Quote("Energy", "XLE", date(2026, 7, 2), 100, 99, 1.0, "test"),
+            Quote("Utilities", "XLU", date(2026, 7, 2), 100, 101, -1.0, "test"),
+        ]
+        rows = self._ohlcv_rows(last_close=100.0, last_volume=1400.0)
+
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            package = build_investment_package(snapshot, sectors, [])
+
+        symbols = {plan.symbol for plan in package.interest_plans}
+        self.assertIn("XOM", symbols)
+        self.assertIn("CVX", symbols)
+        self.assertIn("후보 범위: 전일 가장 강했던 상위 3개 섹터", package.text)
+
     def test_breaking_below_20_day_average_is_wait_and_see(self) -> None:
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=94.0, last_volume=1200.0))
 
