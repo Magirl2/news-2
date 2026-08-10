@@ -13,6 +13,7 @@ from .briefing import Briefing, build_briefing
 from .config import ENV_FILE, LOGS_DIR, REPORTS_DIR, SEND_STATE_FILE, TOKEN_FILE, ensure_project_dirs, load_config
 from .kakao import KakaoClient, KakaoError, build_auth_url, exchange_code, run_local_login
 from .market_calendar import current_market_note, last_completed_trading_day
+from .selection_review import build_selection_review
 
 
 CLOUD_SECRETS_FILE = TOKEN_FILE.parent / "github_actions_secrets.txt"
@@ -635,6 +636,16 @@ def cmd_readiness(args: argparse.Namespace) -> int:
     return 0 if has_config_source and has_key and has_token else 2
 
 
+def cmd_selection_review(args: argparse.Namespace) -> int:
+    text, _warnings = build_selection_review(
+        REPORTS_DIR,
+        horizon=args.horizon,
+        limit=args.limit,
+    )
+    print(text)
+    return 0 if text else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="py -m market_briefing_bot",
@@ -693,6 +704,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     readiness = subparsers.add_parser("readiness", help="카카오 발송과 자동 실행 준비 상태 확인")
     readiness.set_defaults(func=cmd_readiness)
+
+    selection_review = subparsers.add_parser(
+        "selection-review", help="과거 후보가 이후 실제로 유효했는지 표본 검증"
+    )
+    selection_review.add_argument("--horizon", type=int, default=10, help="검증할 최대 거래일 수")
+    selection_review.add_argument("--limit", type=int, default=24, help="가져올 표본 수")
+    selection_review.set_defaults(func=cmd_selection_review)
 
     return parser
 
