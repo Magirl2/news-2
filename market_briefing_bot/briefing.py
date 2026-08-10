@@ -1089,6 +1089,14 @@ def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
 
 
 def _report_badge_class(cell: str) -> str | None:
+    if cell == "진입 후보":
+        return "report-badge action-ok"
+    if cell in {"눌림 관찰", "20일선 회복 대기"}:
+        return "report-badge action-wait"
+    if cell in {"과이격/추격주의", "추세 약화"}:
+        return "report-badge action-risk"
+    if cell == "제외":
+        return "report-badge position-bad"
     if cell in {"지금 소량 가능", "지금은 1차 진입만 가능"}:
         return "report-badge action-ok"
     if cell in {"눌림 확인 후 가능", "돌파 확인 후 가능", "거래량 확인 후 가능"}:

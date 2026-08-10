@@ -658,6 +658,10 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("지금 진입 가능 여부", report)
         self.assertIn("비중 판단", report)
         self.assertIn("손익비", report)
+        self.assertIn("검증 상태", report)
+        self.assertIn("뉴스/추세/위치/진입", report)
+        self.assertIn("기술 검증", report)
+        self.assertIn("검증 경고", report)
         self.assertIn("1차 목표가", report)
         self.assertIn("시작 진입가", report)
         self.assertIn("추가 진입가", report)
@@ -686,6 +690,10 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertLess(abs(plan.ma20_distance_percent or 0), 5)
         self.assertIsNotNone(plan.volume_ratio)
         self.assertGreaterEqual(plan.volume_ratio or 0, 1.2)
+        self.assertEqual(plan.recommendation_state, "ENTRY_READY")
+        self.assertGreaterEqual(plan.trend_score, 65)
+        self.assertGreaterEqual(plan.position_score, 60)
+        self.assertGreaterEqual(plan.entry_score, 60)
 
     def test_far_above_20_day_average_is_chase_risk(self) -> None:
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=115.0, last_volume=1800.0))
@@ -696,6 +704,8 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertEqual(plan.start_weight_percent, 0)
         self.assertIsNone(plan.start_entry_price)
         self.assertEqual(plan.today_grade, "C")
+        self.assertEqual(plan.recommendation_state, "CHASE_RISK")
+        self.assertLess(plan.position_score, 60)
 
     def test_low_volume_reduces_candidate_quality(self) -> None:
         strong = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=1400.0))
@@ -712,6 +722,8 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertEqual(plan.entry_action, "돌파 확인 후 가능")
         self.assertEqual(plan.start_weight_percent, 0)
         self.assertIsNone(plan.start_entry_price)
+        self.assertIn(plan.recommendation_state, {"WATCH_RECLAIM", "TREND_WEAK"})
+        self.assertLess(plan.entry_score, 60)
 
     def test_close_only_rows_show_volume_check_needed(self) -> None:
         rows = self._ohlcv_rows(last_close=100.0, include_volume=False)
@@ -726,6 +738,7 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIsNotNone(plan.add_entry_price)
         self.assertIsNotNone(plan.confirm_entry_price)
         self.assertEqual(plan.chart_confidence_grade, "C")
+        self.assertLess(plan.entry_score, 60)
 
     def test_wide_stop_reduces_position_or_waits(self) -> None:
         plan = self._interest_for_rows(self._ohlcv_rows(last_close=106.0, last_volume=1400.0))
@@ -795,6 +808,14 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("risk_reward_grade", first)
         self.assertIn("position_mode", first)
         self.assertIn("max_start_weight_percent", first)
+        self.assertIn("recommendation_state", first)
+        self.assertIn("news_score", first)
+        self.assertIn("trend_score", first)
+        self.assertIn("position_score", first)
+        self.assertIn("entry_score", first)
+        self.assertIn("technical_trigger", first)
+        self.assertIn("ichimoku_label", first)
+        self.assertEqual(first["recommendation_state"], "ENTRY_READY")
         self.assertEqual(first["entry_action"], "지금 소량 가능")
 
     def test_investment_report_avoids_old_duplicate_rationale_blocks(self) -> None:
@@ -1016,6 +1037,9 @@ class HtmlReportTests(unittest.TestCase):
         self.assertEqual(_report_badge_class("지금 소량 가능"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("추격 금지"), "report-badge action-risk")
         self.assertEqual(_report_badge_class("A(85)"), "report-badge grade-a")
+        self.assertEqual(_report_badge_class("진입 후보"), "report-badge action-ok")
+        self.assertEqual(_report_badge_class("눌림 관찰"), "report-badge action-wait")
+        self.assertEqual(_report_badge_class("과이격/추격주의"), "report-badge action-risk")
 
     def test_position_mode_and_risk_reward_badges_render(self) -> None:
         rendered = _render_report_sections(

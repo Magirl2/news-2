@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..investment_plan import _money
+from ..investment_plan import _ichimoku_label, _money, _technical_trigger_label
 from .alerts import Alert
 from .analyzer import LiveAnalysis, news_lines
 from .commands import condition_label
@@ -19,6 +19,19 @@ def format_analysis(analysis: LiveAnalysis, *, max_chars: int = 3500) -> str:
     lines = [
         f"{analysis.symbol} 최신 분석",
         f"- 현재가: {_money(plan.close)} ({plan.change_percent:+.2f}%)",
+        f"- 추천 상태: {getattr(plan, 'recommendation_label', '확인 필요')} ({getattr(plan, 'recommendation_state', 'UNKNOWN')})",
+        (
+            "- 검증 점수: "
+            f"뉴스 {getattr(plan, 'news_score', '확인 필요')} / "
+            f"추세 {getattr(plan, 'trend_score', '확인 필요')} / "
+            f"위치 {getattr(plan, 'position_score', '확인 필요')} / "
+            f"진입 {getattr(plan, 'entry_score', '확인 필요')}"
+        ),
+        (
+            "- 기술 검증: "
+            f"{_technical_trigger_label(getattr(plan, 'technical_trigger', 'WAIT_CONFIRMATION'))}, "
+            f"구름 위치 {_ichimoku_label(getattr(plan, 'ichimoku_position', 'CHECK_NEEDED'))}"
+        ),
         f"- 판단: {plan.entry_action} + {plan.position_mode}",
         f"- 시작 비중: {plan.start_weight_percent}% / 최대 시작 비중: {plan.max_start_weight_percent}%",
         f"- 손익비: {_risk_reward(plan.risk_reward_ratio)}, {plan.risk_reward_grade}",
@@ -83,6 +96,14 @@ def format_alert_triggered(alert: Alert, current_price: float, analysis: LiveAna
     if analysis:
         plan = analysis.plan
         lines.extend([
+            f"- 추천 상태: {getattr(plan, 'recommendation_label', '확인 필요')} ({getattr(plan, 'recommendation_state', 'UNKNOWN')})",
+            (
+                "- 검증 점수: "
+                f"뉴스 {getattr(plan, 'news_score', '확인 필요')} / "
+                f"추세 {getattr(plan, 'trend_score', '확인 필요')} / "
+                f"위치 {getattr(plan, 'position_score', '확인 필요')} / "
+                f"진입 {getattr(plan, 'entry_score', '확인 필요')}"
+            ),
             f"- 기존 판단: {plan.entry_action} + {plan.position_mode}",
             f"- 확인할 것: {plan.size_up_condition}",
             f"- 무효화: {_money(plan.invalidation_price)} 이탈",

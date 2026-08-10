@@ -141,6 +141,9 @@ class LiveBotMessageTests(unittest.TestCase):
             warnings = []
 
         text = format_analysis(Analysis())
+        self.assertIn("추천 상태", text)
+        self.assertIn("검증 점수", text)
+        self.assertIn("기술 검증", text)
         self.assertIn("손익비 우수", text)
         self.assertNotIn("매수 추천", text)
         self.assertNotIn("풀매수 가능", text)

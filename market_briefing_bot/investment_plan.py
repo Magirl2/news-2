@@ -33,13 +33,25 @@ class StockPlan:
     judgement: str
     ma20: float | None
     ma50: float | None
+    ma60: float | None
     ma20_distance_percent: float | None
     ma50_distance_percent: float | None
+    ma60_distance_percent: float | None
     ma20_slope_percent: float | None
     ma50_slope_percent: float | None
     volume_ratio: float | None
     volume_ratio_3d: float | None
     volume_status: str
+    news_score: int
+    trend_score: int
+    position_score: int
+    entry_score: int
+    overall_score: int
+    recommendation_state: str
+    recommendation_label: str
+    technical_trigger: str
+    validation_warning: str
+    ichimoku_position: str
     chart_confidence_score: int
     chart_confidence_grade: str
     today_score: int
@@ -124,6 +136,53 @@ def _moving_average_slope(rows: list[dict], period: int, lookback: int = 5) -> f
     return _pct(current, previous) if current is not None else None
 
 
+def _midpoint(rows: list[dict]) -> float | None:
+    highs = [float(row.get("high", row["close"])) for row in rows if row.get("close") is not None]
+    lows = [float(row.get("low", row["close"])) for row in rows if row.get("close") is not None]
+    if not highs or not lows:
+        return None
+    return (max(highs) + min(lows)) / 2
+
+
+def _ichimoku_position(rows: list[dict], close: float) -> str:
+    if len(rows) < 52:
+        return "CHECK_NEEDED"
+    tenkan = _midpoint(rows[-9:])
+    kijun = _midpoint(rows[-26:])
+    span_b = _midpoint(rows[-52:])
+    if tenkan is None or kijun is None or span_b is None:
+        return "CHECK_NEEDED"
+    span_a = (tenkan + kijun) / 2
+    cloud_top = max(span_a, span_b)
+    cloud_bottom = min(span_a, span_b)
+    if close > cloud_top:
+        return "ABOVE_CLOUD"
+    if close < cloud_bottom:
+        return "BELOW_CLOUD"
+    return "IN_CLOUD"
+
+
+def _ichimoku_label(position: str) -> str:
+    labels = {
+        "ABOVE_CLOUD": "구름 위",
+        "IN_CLOUD": "구름 안",
+        "BELOW_CLOUD": "구름 아래",
+        "CHECK_NEEDED": "확인 필요",
+    }
+    return labels.get(position, "확인 필요")
+
+
+def _technical_trigger_label(trigger: str) -> str:
+    labels = {
+        "SUPPORT_BOUNCE_PROXY": "20일선 지지 반응",
+        "SMA20_RECLAIM_PROXY": "20일선 회복",
+        "BREAKOUT_PROXY": "5일 고점 돌파",
+        "WAIT_CONFIRMATION": "장중 확인 대기",
+        "NO_DAILY_LEVEL": "기준선 부족",
+    }
+    return labels.get(trigger, "확인 필요")
+
+
 def _distance_text(value: float | None) -> str:
     return "데이터 부족" if value is None else format_change(value)
 
@@ -187,8 +246,10 @@ def _stock_metrics(symbol: str, snapshot: MarketSnapshot) -> dict:
     closes = [float(row["close"]) for row in rows]
     ma20 = _moving_average(rows, 20)
     ma50 = _moving_average(rows, 50)
+    ma60 = _moving_average(rows, 60)
     ma20_distance = _pct(close, ma20)
     ma50_distance = _pct(close, ma50)
+    ma60_distance = _pct(close, ma60)
     ma20_slope = _moving_average_slope(rows, 20)
     ma50_slope = _moving_average_slope(rows, 50)
     recent_5_change = _pct(close, closes[-6]) if len(closes) >= 6 else None
@@ -219,10 +280,15 @@ def _stock_metrics(symbol: str, snapshot: MarketSnapshot) -> dict:
         "recent_low": recent_low,
         "recent_5_high": max(recent_5_highs),
         "recent_5_low": min(recent_5_lows),
+        "previous_5_high": max(
+            float(row.get("high", row["close"])) for row in rows[-6:-1]
+        ) if len(rows) >= 6 else float(previous.get("high", previous["close"])),
         "ma20": ma20,
         "ma50": ma50,
+        "ma60": ma60,
         "ma20_distance_percent": ma20_distance,
         "ma50_distance_percent": ma50_distance,
+        "ma60_distance_percent": ma60_distance,
         "ma20_slope_percent": ma20_slope,
         "ma50_slope_percent": ma50_slope,
         "recent_5_change_percent": recent_5_change,
@@ -231,6 +297,7 @@ def _stock_metrics(symbol: str, snapshot: MarketSnapshot) -> dict:
         "volume_status": _volume_status(volume_ratio, volume_ratio_3d, up_day),
         "has_ohlcv": has_ohlcv,
         "up_day": up_day,
+        "ichimoku_position": _ichimoku_position(rows, close),
     }
 
 
@@ -252,6 +319,198 @@ def _news_bias(news_items: list[NewsItem]) -> tuple[float, str]:
             score -= 0.2
     unique_labels = ", ".join(dict.fromkeys(labels[:5])) or "주요 뉴스"
     return score, unique_labels
+
+
+def _clamp_score(value: float) -> int:
+    return max(0, min(100, round(value)))
+
+
+def _component_news_score(news_score: float) -> int:
+    return _clamp_score(55 + news_score * 18)
+
+
+def _trend_validation_score(metrics: dict, sector_quote: Quote) -> int:
+    score = 45
+    close = metrics["close"]
+    ma20 = metrics["ma20"]
+    ma60 = metrics["ma60"] or metrics["ma50"]
+    ma20_slope = metrics["ma20_slope_percent"]
+    ma50_slope = metrics["ma50_slope_percent"]
+    ichimoku_position = metrics["ichimoku_position"]
+    if ma20 is not None:
+        score += 16 if close > ma20 else -18
+    if ma20_slope is not None:
+        if ma20_slope >= 0.3:
+            score += 18
+        elif ma20_slope <= -0.3:
+            score -= 18
+        else:
+            score += 4
+    if ma60 is not None and ma20 is not None:
+        score += 16 if ma20 > ma60 else -14
+    if ma50_slope is not None and ma50_slope > 0:
+        score += 6
+    if ichimoku_position == "ABOVE_CLOUD":
+        score += 12
+    elif ichimoku_position == "BELOW_CLOUD":
+        score -= 18
+    if sector_quote.change_percent > 0:
+        score += min(8, sector_quote.change_percent * 3)
+    elif sector_quote.change_percent < -1:
+        score -= 8
+    return _clamp_score(score)
+
+
+def _position_validation_score(metrics: dict, strategy: dict) -> int:
+    score = 45
+    ma20_distance = metrics["ma20_distance_percent"]
+    recent_5_change = metrics["recent_5_change_percent"]
+    stop_pct = strategy["stop_loss_percent"]
+    if ma20_distance is None:
+        score -= 12
+    elif -2 <= ma20_distance <= 2:
+        score += 35
+    elif 2 < ma20_distance <= 5:
+        score += 20
+    elif 5 < ma20_distance <= 8:
+        score -= 8
+    elif ma20_distance > 8:
+        score -= 35
+    elif -4 <= ma20_distance < -2:
+        score -= 10
+    else:
+        score -= 25
+    if recent_5_change is not None and recent_5_change >= 10:
+        score -= 25
+    if stop_pct is None:
+        score -= 8
+    elif stop_pct <= 4:
+        score += 15
+    elif stop_pct <= 7:
+        score -= 8
+    else:
+        score -= 28
+    return _clamp_score(score)
+
+
+def _technical_trigger(metrics: dict) -> str:
+    close = metrics["close"]
+    ma20 = metrics["ma20"]
+    ma20_slope = metrics["ma20_slope_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    ma20_distance = metrics["ma20_distance_percent"]
+    if ma20 is None:
+        return "NO_DAILY_LEVEL"
+    if (
+        metrics["current_low"] <= ma20 * 1.005
+        and close > ma20
+        and ma20_slope is not None
+        and ma20_slope >= 0.3
+        and volume_ratio is not None
+        and volume_ratio >= 1.2
+    ):
+        return "SUPPORT_BOUNCE_PROXY"
+    if metrics["previous_close"] < ma20 and close > ma20 and volume_ratio is not None and volume_ratio >= 1.0:
+        return "SMA20_RECLAIM_PROXY"
+    if (
+        close > metrics["previous_5_high"]
+        and volume_ratio is not None
+        and volume_ratio >= 1.5
+        and (ma20_distance is None or ma20_distance <= 5)
+    ):
+        return "BREAKOUT_PROXY"
+    return "WAIT_CONFIRMATION"
+
+
+def _entry_validation_score(metrics: dict, strategy: dict, trigger: str) -> int:
+    score = 35
+    volume_ratio = metrics["volume_ratio"]
+    ma20_distance = metrics["ma20_distance_percent"]
+    if strategy["start_entry_price"] is not None:
+        score += 12
+    if trigger in {"SUPPORT_BOUNCE_PROXY", "SMA20_RECLAIM_PROXY"}:
+        score += 25
+    elif trigger == "BREAKOUT_PROXY":
+        score += 18
+    if volume_ratio is None:
+        score -= 10
+    elif volume_ratio >= 2.0:
+        score += 22
+    elif volume_ratio >= 1.5:
+        score += 18
+    elif volume_ratio >= 1.2:
+        score += 14
+    elif volume_ratio < 0.8:
+        score -= 18
+    if ma20_distance is not None and ma20_distance > 5:
+        score -= 28
+    if ma20_distance is not None and ma20_distance < -3:
+        score -= 18
+    return _clamp_score(score)
+
+
+def _overall_validation_score(news_score: int, trend_score: int, position_score: int, entry_score: int) -> int:
+    return _clamp_score(news_score * 0.20 + trend_score * 0.30 + position_score * 0.25 + entry_score * 0.25)
+
+
+def _state_label(state: str) -> str:
+    labels = {
+        "ENTRY_READY": "진입 후보",
+        "WATCH_PULLBACK": "눌림 관찰",
+        "WATCH_RECLAIM": "20일선 회복 대기",
+        "CHASE_RISK": "과이격/추격주의",
+        "TREND_WEAK": "추세 약화",
+        "EXCLUDED": "제외",
+    }
+    return labels.get(state, "확인 필요")
+
+
+def _recommendation_state(
+    metrics: dict,
+    strategy: dict,
+    risk_plan: dict,
+    *,
+    news_score: int,
+    trend_score: int,
+    position_score: int,
+    entry_score: int,
+) -> tuple[str, str, str]:
+    ma20_distance = metrics["ma20_distance_percent"]
+    recent_5_change = metrics["recent_5_change_percent"]
+    overextended = (ma20_distance is not None and ma20_distance > 5) or (
+        recent_5_change is not None and recent_5_change >= 10
+    )
+    if strategy["action"] == "?쒖쇅":
+        state = "EXCLUDED"
+        warning = "비선호 후보로 분류되어 신규 진입 검증 대상에서 제외합니다."
+    elif overextended:
+        state = "CHASE_RISK"
+        warning = "뉴스와 추세가 좋아도 20일선 이격 또는 단기 급등이 커서 추격 매수 위험을 우선 표시합니다."
+    elif trend_score < 45:
+        state = "TREND_WEAK"
+        warning = "뉴스 촉매가 있어도 Daily 추세가 약해 가격 회복 확인 전에는 우선순위를 낮춥니다."
+    elif ma20_distance is not None and ma20_distance < -2:
+        state = "WATCH_RECLAIM"
+        warning = "20일선 아래에 있어 회복과 지지 확인이 먼저입니다."
+    elif (
+        strategy["start_entry_price"] is not None
+        and risk_plan["max_start_weight_percent"] > 0
+        and trend_score >= 65
+        and position_score >= 60
+        and entry_score >= 60
+    ):
+        state = "ENTRY_READY"
+        warning = "뉴스 후보가 Daily 추세와 현재 위치 검증을 통과했습니다. 장중 가격/거래량 재확인이 필요합니다."
+    elif trend_score >= 65 and position_score < 60:
+        state = "WATCH_PULLBACK"
+        warning = "종목과 추세는 강하지만 현재 위치가 덜 유리해 눌림 확인이 우선입니다."
+    elif news_score >= 65 and trend_score >= 55:
+        state = "WATCH_RECLAIM"
+        warning = "뉴스 촉매는 있으나 진입 트리거가 부족해 회복/돌파 확인 후 판단합니다."
+    else:
+        state = "WATCH_PULLBACK"
+        warning = "한 가지 점수만으로 진입하지 않고 위치와 거래량 확인을 기다립니다."
+    return state, _state_label(state), warning
 
 
 def _score_100(raw_score: float) -> int:
@@ -660,6 +919,7 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
     recent_low = metrics["recent_low"]
     ma20 = metrics["ma20"]
     ma50 = metrics["ma50"]
+    ma60 = metrics["ma60"]
     news_score, news_labels = _news_bias(news_items)
     today_score = _today_attractiveness(metrics, sector_quote, news_score)
     chart_score = _chart_confidence(metrics, sector_quote)
@@ -673,13 +933,32 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         strategy["start_entry_price"] = None
         risk_plan["position_reason"] = "진입 부적합: 현재 가격에서는 시작 비중을 0%로 둡니다."
     strategy["top_reason"] = f"{strategy['action']} + {risk_plan['position_mode']}, 손익비 {_format_risk_reward(risk_plan['risk_reward_ratio'])}"
+    component_news_score = _component_news_score(news_score)
+    trend_score = _trend_validation_score(metrics, sector_quote)
+    position_score = _position_validation_score(metrics, strategy)
+    technical_trigger = _technical_trigger(metrics)
+    entry_score = _entry_validation_score(metrics, strategy, technical_trigger)
+    overall_score = _overall_validation_score(component_news_score, trend_score, position_score, entry_score)
+    recommendation_state, recommendation_label, validation_warning = _recommendation_state(
+        metrics,
+        strategy,
+        risk_plan,
+        news_score=component_news_score,
+        trend_score=trend_score,
+        position_score=position_score,
+        entry_score=entry_score,
+    )
+    strategy["top_reason"] = (
+        f"{recommendation_label} / N-T-P-E {component_news_score}-{trend_score}-{position_score}-{entry_score} / "
+        f"{strategy['top_reason']}"
+    )
     setup_type = strategy["setup_type"]
     judgement = strategy["action"]
     support = strategy["add_entry_price"] or _support_price(close, ma20, recent_low)
     stop = strategy["invalidation_price"]
     entry_price = strategy["start_entry_price"] or strategy["add_entry_price"] or strategy["confirm_entry_price"] or close
-    raw_score = (today_score - 50) / 5
-    score = _score_100(raw_score)
+    raw_score = (overall_score - 50) / 5
+    score = overall_score
     sector_name = SECTOR_KO.get(sector_quote.name, sector_quote.name)
     reasons = _score_reasons(
         sector_quote,
@@ -691,6 +970,8 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
     )
     if metrics["ma20_distance_percent"] is not None:
         reasons.append(f"20일선 거리 {_distance_text(metrics['ma20_distance_percent'])}")
+    reasons.append(f"검증 상태 {recommendation_label}")
+    reasons.append(f"뉴스/추세/위치/진입 {component_news_score}/{trend_score}/{position_score}/{entry_score}")
     reasons.append(metrics["volume_status"])
     if setup_type == "추격 위험형":
         reasons.append("20일선 이격/단기 급등으로 추격 위험")
@@ -737,13 +1018,25 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         judgement=judgement,
         ma20=ma20,
         ma50=ma50,
+        ma60=ma60,
         ma20_distance_percent=metrics["ma20_distance_percent"],
         ma50_distance_percent=metrics["ma50_distance_percent"],
+        ma60_distance_percent=metrics["ma60_distance_percent"],
         ma20_slope_percent=metrics["ma20_slope_percent"],
         ma50_slope_percent=metrics["ma50_slope_percent"],
         volume_ratio=metrics["volume_ratio"],
         volume_ratio_3d=metrics["volume_ratio_3d"],
         volume_status=metrics["volume_status"],
+        news_score=component_news_score,
+        trend_score=trend_score,
+        position_score=position_score,
+        entry_score=entry_score,
+        overall_score=overall_score,
+        recommendation_state=recommendation_state,
+        recommendation_label=recommendation_label,
+        technical_trigger=technical_trigger,
+        validation_warning=validation_warning,
+        ichimoku_position=metrics["ichimoku_position"],
         chart_confidence_score=chart_score,
         chart_confidence_grade=_grade(chart_score),
         today_score=today_score,
@@ -782,6 +1075,7 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
     recent_low = metrics["recent_low"]
     ma20 = metrics["ma20"]
     ma50 = metrics["ma50"]
+    ma60 = metrics["ma60"]
     news_score, news_labels = _news_bias(news_items)
     reclaim = max(close * 1.03, recent_high * 0.98)
     stop = min(close * 0.95, recent_low * 0.995)
@@ -791,6 +1085,17 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
     score = _score_100(raw_score)
     chart_score = _chart_confidence(metrics, sector_quote)
     today_score = _today_attractiveness(metrics, sector_quote, news_score)
+    component_news_score = _component_news_score(news_score)
+    trend_score = _trend_validation_score(metrics, sector_quote)
+    position_score = 0
+    entry_score = 0
+    overall_score = min(40, _overall_validation_score(component_news_score, trend_score, position_score, entry_score))
+    raw_score = (overall_score - 50) / 5
+    score = overall_score
+    recommendation_state = "EXCLUDED"
+    recommendation_label = _state_label(recommendation_state)
+    technical_trigger = _technical_trigger(metrics)
+    validation_warning = "비선호 섹터/종목 후보라 신규 진입보다 회복 확인 또는 제외가 우선입니다."
     setup_type = "관망형"
     judgement = "비선호 후보"
     why_today = (
@@ -829,13 +1134,25 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
         judgement=judgement,
         ma20=ma20,
         ma50=ma50,
+        ma60=ma60,
         ma20_distance_percent=metrics["ma20_distance_percent"],
         ma50_distance_percent=metrics["ma50_distance_percent"],
+        ma60_distance_percent=metrics["ma60_distance_percent"],
         ma20_slope_percent=metrics["ma20_slope_percent"],
         ma50_slope_percent=metrics["ma50_slope_percent"],
         volume_ratio=metrics["volume_ratio"],
         volume_ratio_3d=metrics["volume_ratio_3d"],
         volume_status=metrics["volume_status"],
+        news_score=component_news_score,
+        trend_score=trend_score,
+        position_score=position_score,
+        entry_score=entry_score,
+        overall_score=overall_score,
+        recommendation_state=recommendation_state,
+        recommendation_label=recommendation_label,
+        technical_trigger=technical_trigger,
+        validation_warning=validation_warning,
+        ichimoku_position=metrics["ichimoku_position"],
         chart_confidence_score=chart_score,
         chart_confidence_grade=_grade(chart_score),
         today_score=today_score,
@@ -884,8 +1201,8 @@ def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
         return "오늘 바로 볼 종목 TOP 5\n데이터 부족으로 후보를 만들지 못했습니다."
     lines = [
         "오늘 바로 볼 종목 TOP 5",
-        "|종목|지금 진입 가능 여부|비중 판단|시작 비중|손익비|시작 진입가|추가 진입가|확인 진입가|무효화 가격|1차 목표가|한 줄 이유|",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "|종목|검증 상태|N/T/P/E|지금 진입 가능 여부|비중 판단|시작 비중|손익비|시작 진입가|추가 진입가|확인 진입가|무효화 가격|1차 목표가|한 줄 이유|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for plan in top_plans:
         lines.append(
@@ -893,6 +1210,8 @@ def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
             + "|".join(
                 [
                     f"{plan.name}({plan.symbol})",
+                    plan.recommendation_label,
+                    f"{plan.news_score}/{plan.trend_score}/{plan.position_score}/{plan.entry_score}",
                     plan.entry_action,
                     plan.position_mode,
                     _format_weight(plan),
@@ -916,8 +1235,8 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
     lines = [title]
     lines.extend(
         [
-            "|종목|유형|현재가|20일선 거리|거래량 상태|차트 신뢰도|오늘 매력도|지금 진입 가능 여부|비중 판단|시작 비중|최대 시작 비중|손익비|손익비 등급|1차 목표가|시작 진입가|추가 진입가|확인 진입가|무효화 가격|손절폭|",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "|종목|유형|현재가|20일선 거리|거래량 상태|검증 상태|뉴스/추세/위치/진입|구름 위치|기술 트리거|차트 신뢰도|오늘 매력도|지금 진입 가능 여부|비중 판단|시작 비중|최대 시작 비중|손익비|손익비 등급|1차 목표가|시작 진입가|추가 진입가|확인 진입가|무효화 가격|손절폭|",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for plan in plans:
@@ -930,6 +1249,10 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
                     f"{_money(plan.close)} {format_change(plan.change_percent)}",
                     _distance_text(plan.ma20_distance_percent),
                     f"{plan.volume_status} {_ratio_text(plan.volume_ratio)}",
+                    plan.recommendation_label,
+                    f"{plan.news_score}/{plan.trend_score}/{plan.position_score}/{plan.entry_score}",
+                    _ichimoku_label(plan.ichimoku_position),
+                    _technical_trigger_label(plan.technical_trigger),
                     f"{plan.chart_confidence_grade}({plan.chart_confidence_score})",
                     f"{plan.today_grade}({plan.today_score})",
                     plan.entry_action,
@@ -951,6 +1274,10 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
     for index, plan in enumerate(plans, start=1):
         lines.extend([
             f"{index}. {plan.name}({plan.symbol}) / {plan.sector} / {plan.entry_action} / 시작 비중 {_format_weight(plan)}",
+            f"   추천 상태: {plan.recommendation_label}({plan.recommendation_state}) / 종합 {plan.overall_score}점",
+            f"   검증 점수: 뉴스 {plan.news_score}, 추세 {plan.trend_score}, 위치 {plan.position_score}, 진입 {plan.entry_score}",
+            f"   기술 검증: 20일선 거리 {_distance_text(plan.ma20_distance_percent)}, 20일선 기울기 {_distance_text(plan.ma20_slope_percent)}, 60일선 거리 {_distance_text(plan.ma60_distance_percent)}, 구름 위치 {_ichimoku_label(plan.ichimoku_position)}, 트리거 {_technical_trigger_label(plan.technical_trigger)}",
+            f"   검증 경고: {plan.validation_warning}",
             f"   지금 들어갈 수 있는 이유: {plan.can_enter_reason}",
             f"   지금 들어가면 위험한 이유: {plan.entry_risk}",
             f"   손익비 판단: {plan.risk_reward_reason}",
@@ -983,10 +1310,26 @@ def _plan_signal(plan: StockPlan, target_date: date) -> dict[str, Any]:
         "judgement": plan.judgement,
         "ma20": round(plan.ma20, 4) if plan.ma20 is not None else None,
         "ma50": round(plan.ma50, 4) if plan.ma50 is not None else None,
+        "ma60": round(plan.ma60, 4) if plan.ma60 is not None else None,
         "ma20_distance_percent": round(plan.ma20_distance_percent, 4) if plan.ma20_distance_percent is not None else None,
         "ma50_distance_percent": round(plan.ma50_distance_percent, 4) if plan.ma50_distance_percent is not None else None,
+        "ma60_distance_percent": round(plan.ma60_distance_percent, 4) if plan.ma60_distance_percent is not None else None,
+        "ma20_slope_percent": round(plan.ma20_slope_percent, 4) if plan.ma20_slope_percent is not None else None,
+        "ma50_slope_percent": round(plan.ma50_slope_percent, 4) if plan.ma50_slope_percent is not None else None,
         "volume_ratio": round(plan.volume_ratio, 4) if plan.volume_ratio is not None else None,
         "volume_status": plan.volume_status,
+        "news_score": plan.news_score,
+        "trend_score": plan.trend_score,
+        "position_score": plan.position_score,
+        "entry_score": plan.entry_score,
+        "overall_score": plan.overall_score,
+        "recommendation_state": plan.recommendation_state,
+        "recommendation_label": plan.recommendation_label,
+        "technical_trigger": plan.technical_trigger,
+        "technical_trigger_label": _technical_trigger_label(plan.technical_trigger),
+        "validation_warning": plan.validation_warning,
+        "ichimoku_position": plan.ichimoku_position,
+        "ichimoku_label": _ichimoku_label(plan.ichimoku_position),
         "chart_confidence_score": plan.chart_confidence_score,
         "chart_confidence_grade": plan.chart_confidence_grade,
         "today_score": plan.today_score,
