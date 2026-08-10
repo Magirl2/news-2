@@ -654,7 +654,7 @@ class InvestmentPlanTests(unittest.TestCase):
             report, warnings = build_investment_report(snapshot, sectors, news)
         self.assertFalse(warnings)
         self.assertIn("유의 섹터", report)
-        self.assertIn("관찰 후보", report)
+        self.assertIn("B급: 조건부 관찰", report)
         self.assertIn("비선호 후보", report)
         self.assertIn("오늘 진입 검토 TOP 5", report)
         self.assertIn("지금 진입 가능 여부", report)
@@ -693,6 +693,8 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIsNotNone(plan.volume_ratio)
         self.assertGreaterEqual(plan.volume_ratio or 0, 1.2)
         self.assertEqual(plan.recommendation_state, "ENTRY_READY")
+        self.assertEqual(plan.candidate_grade, "A급")
+        self.assertEqual(plan.entry_style, "눌림 진입형")
         self.assertGreaterEqual(plan.trend_score, 65)
         self.assertGreaterEqual(plan.position_score, 60)
         self.assertGreaterEqual(plan.entry_score, 60)
@@ -720,6 +722,7 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertEqual(weak.start_weight_percent, 0)
         self.assertIsNone(weak.start_entry_price)
         self.assertNotEqual(weak.recommendation_state, "ENTRY_READY")
+        self.assertEqual(weak.candidate_grade, "C급")
 
     def test_top_action_table_only_shows_entry_ready_candidates(self) -> None:
         base = self._interest_for_rows(self._ohlcv_rows(last_close=100.0, last_volume=1400.0))
@@ -729,6 +732,8 @@ class InvestmentPlanTests(unittest.TestCase):
             name="Good",
             recommendation_state="ENTRY_READY",
             recommendation_label="오늘 진입 검토",
+            candidate_grade="A급",
+            entry_style="눌림 진입형",
             start_weight_percent=35,
             start_entry_price=base.close,
             volume_ratio=1.3,
@@ -741,6 +746,8 @@ class InvestmentPlanTests(unittest.TestCase):
             name="Wait",
             recommendation_state="WATCH_PULLBACK",
             recommendation_label="눌림 관찰",
+            candidate_grade="B급",
+            entry_style="눌림 확인형",
             start_weight_percent=0,
             start_entry_price=None,
             volume_ratio=0.7,
@@ -752,6 +759,8 @@ class InvestmentPlanTests(unittest.TestCase):
 
         self.assertIn("오늘 진입 검토 TOP 5", text)
         self.assertIn("Good(GOOD)", text)
+        self.assertIn("A급", text)
+        self.assertIn("눌림 진입형", text)
         self.assertNotIn("Wait(WAIT)", text)
 
     def test_investment_package_scans_top_three_strong_sectors(self) -> None:
@@ -878,7 +887,10 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("entry_score", first)
         self.assertIn("technical_trigger", first)
         self.assertIn("ichimoku_label", first)
+        self.assertIn("candidate_grade", first)
+        self.assertIn("entry_style", first)
         self.assertEqual(first["recommendation_state"], "ENTRY_READY")
+        self.assertEqual(first["candidate_grade"], "A급")
         self.assertEqual(first["entry_action"], "지금 소량 가능")
 
     def test_investment_report_avoids_old_duplicate_rationale_blocks(self) -> None:
@@ -1111,6 +1123,10 @@ class HtmlReportTests(unittest.TestCase):
         self.assertEqual(_report_badge_class("지금 소량 가능"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("추격 금지"), "report-badge action-risk")
         self.assertEqual(_report_badge_class("A(85)"), "report-badge grade-a")
+        self.assertEqual(_report_badge_class("A급"), "report-badge grade-a")
+        self.assertEqual(_report_badge_class("B급"), "report-badge grade-b")
+        self.assertEqual(_report_badge_class("C급"), "report-badge grade-c")
+        self.assertEqual(_report_badge_class("오늘 진입 검토"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("진입 후보"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("눌림 관찰"), "report-badge action-wait")
         self.assertEqual(_report_badge_class("과이격/추격주의"), "report-badge action-risk")

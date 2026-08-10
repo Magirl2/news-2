@@ -19,6 +19,7 @@ def format_analysis(analysis: LiveAnalysis, *, max_chars: int = 3500) -> str:
     lines = [
         f"{analysis.symbol} 최신 분석",
         f"- 현재가: {_money(plan.close)} ({plan.change_percent:+.2f}%)",
+        f"- 후보 등급: {getattr(plan, 'candidate_grade', '확인 필요')} / 진입 방식: {getattr(plan, 'entry_style', '확인 필요')}",
         f"- 추천 상태: {getattr(plan, 'recommendation_label', '확인 필요')} ({getattr(plan, 'recommendation_state', 'UNKNOWN')})",
         (
             "- 검증 점수: "
@@ -97,6 +98,7 @@ def format_alert_triggered(alert: Alert, current_price: float, analysis: LiveAna
         plan = analysis.plan
         lines.extend([
             f"- 추천 상태: {getattr(plan, 'recommendation_label', '확인 필요')} ({getattr(plan, 'recommendation_state', 'UNKNOWN')})",
+            f"- 후보 등급: {getattr(plan, 'candidate_grade', '확인 필요')} / 진입 방식: {getattr(plan, 'entry_style', '확인 필요')}",
             (
                 "- 검증 점수: "
                 f"뉴스 {getattr(plan, 'news_score', '확인 필요')} / "

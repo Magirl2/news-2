@@ -49,6 +49,8 @@ class StockPlan:
     overall_score: int
     recommendation_state: str
     recommendation_label: str
+    candidate_grade: str
+    entry_style: str
     technical_trigger: str
     validation_warning: str
     ichimoku_position: str
@@ -535,6 +537,62 @@ def _recommendation_state(
     return state, _state_label(state), warning
 
 
+def _entry_style(setup_type: str, action: str) -> str:
+    if setup_type == "20일선 근접 거래량형":
+        return "눌림 진입형"
+    if setup_type == "20일선 근접 확인형":
+        return "눌림 확인형"
+    if setup_type == "20일선 회복 대기형":
+        return "회복 확인형"
+    if setup_type == "추격 위험형":
+        return "추격 금지형"
+    if setup_type == "눌림 대기형":
+        return "눌림 대기형"
+    if setup_type == "거래량 확인형" or "돌파" in action:
+        return "돌파 진입형"
+    if action == "제외":
+        return "제외형"
+    return "가격 확인형"
+
+
+def _candidate_grade(metrics: dict, strategy: dict, risk_plan: dict, recommendation_state: str) -> str:
+    ma20_distance = metrics["ma20_distance_percent"]
+    recent_5_change = metrics["recent_5_change_percent"]
+    volume_ratio = metrics["volume_ratio"]
+    ratio = risk_plan["risk_reward_ratio"]
+    stop_pct = strategy["stop_loss_percent"]
+    has_start = strategy["start_entry_price"] is not None and strategy["start_weight_percent"] > 0
+    near_ma20 = ma20_distance is not None and -2 <= ma20_distance <= 5
+    overextended = (ma20_distance is not None and ma20_distance >= 8) or (
+        recent_5_change is not None and recent_5_change >= 10
+    )
+    volume_a = volume_ratio is not None and volume_ratio >= 1.2
+    volume_b = volume_ratio is not None and volume_ratio >= 1.0
+    risk_ok = ratio is not None and ratio >= 1.5
+    stop_ok = stop_pct is not None and stop_pct <= 5
+
+    if (
+        recommendation_state == "ENTRY_READY"
+        and has_start
+        and near_ma20
+        and volume_a
+        and risk_ok
+        and stop_ok
+        and not overextended
+    ):
+        return "A급"
+
+    if recommendation_state in {"CHASE_RISK", "TREND_WEAK", "EXCLUDED"} or overextended:
+        return "C급"
+    if volume_ratio is not None and volume_ratio < 1.0:
+        return "C급"
+    if has_start and (not risk_ok or not stop_ok):
+        return "C급"
+    if recommendation_state in {"WATCH_PULLBACK", "WATCH_RECLAIM"} or volume_b:
+        return "B급"
+    return "C급"
+
+
 def _score_100(raw_score: float) -> int:
     return max(0, min(100, round(50 + raw_score * 5)))
 
@@ -983,8 +1041,10 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         position_score=position_score,
         entry_score=entry_score,
     )
+    candidate_grade = _candidate_grade(metrics, strategy, risk_plan, recommendation_state)
+    entry_style = _entry_style(strategy["setup_type"], strategy["action"])
     strategy["top_reason"] = (
-        f"{recommendation_label} / N-T-P-E {component_news_score}-{trend_score}-{position_score}-{entry_score} / "
+        f"{candidate_grade} {entry_style} / {recommendation_label} / N-T-P-E {component_news_score}-{trend_score}-{position_score}-{entry_score} / "
         f"{strategy['top_reason']}"
     )
     setup_type = strategy["setup_type"]
@@ -1006,6 +1066,8 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
     if metrics["ma20_distance_percent"] is not None:
         reasons.append(f"20일선 거리 {_distance_text(metrics['ma20_distance_percent'])}")
     reasons.append(f"검증 상태 {recommendation_label}")
+    reasons.append(f"후보 등급 {candidate_grade}")
+    reasons.append(f"진입 방식 {entry_style}")
     reasons.append(f"뉴스/추세/위치/진입 {component_news_score}/{trend_score}/{position_score}/{entry_score}")
     reasons.append(metrics["volume_status"])
     if setup_type == "추격 위험형":
@@ -1069,6 +1131,8 @@ def _interest_plan(symbol: str, name: str, sector_quote: Quote, snapshot: Market
         overall_score=overall_score,
         recommendation_state=recommendation_state,
         recommendation_label=recommendation_label,
+        candidate_grade=candidate_grade,
+        entry_style=entry_style,
         technical_trigger=technical_trigger,
         validation_warning=validation_warning,
         ichimoku_position=metrics["ichimoku_position"],
@@ -1185,6 +1249,8 @@ def _avoid_plan(symbol: str, name: str, sector_quote: Quote, snapshot: MarketSna
         overall_score=overall_score,
         recommendation_state=recommendation_state,
         recommendation_label=recommendation_label,
+        candidate_grade="C급",
+        entry_style="제외형",
         technical_trigger=technical_trigger,
         validation_warning=validation_warning,
         ichimoku_position=metrics["ichimoku_position"],
@@ -1231,11 +1297,12 @@ def _format_target(plan: StockPlan) -> str:
 
 
 def _is_entry_candidate(plan: StockPlan) -> bool:
-    volume_ok = plan.volume_ratio is not None and plan.volume_ratio >= 1.0
+    volume_ok = plan.volume_ratio is not None and plan.volume_ratio >= 1.2
     risk_ok = plan.risk_reward_ratio is not None and plan.risk_reward_ratio >= 1.5
     stop_ok = plan.stop_loss_percent is not None and plan.stop_loss_percent <= 5
     return (
-        plan.recommendation_state == "ENTRY_READY"
+        plan.candidate_grade == "A급"
+        and plan.recommendation_state == "ENTRY_READY"
         and plan.start_weight_percent > 0
         and plan.start_entry_price is not None
         and volume_ok
@@ -1246,11 +1313,11 @@ def _is_entry_candidate(plan: StockPlan) -> bool:
 
 def _plan_priority_score(plan: StockPlan) -> float:
     score = float(plan.overall_score)
-    if _is_entry_candidate(plan):
+    if plan.candidate_grade == "A급":
         score += 180
-    elif plan.recommendation_state in {"WATCH_PULLBACK", "WATCH_RECLAIM"}:
+    elif plan.candidate_grade == "B급":
         score += 40
-    elif plan.recommendation_state == "CHASE_RISK":
+    elif plan.candidate_grade == "C급" or plan.recommendation_state == "CHASE_RISK":
         score -= 90
     elif plan.recommendation_state in {"TREND_WEAK", "EXCLUDED"}:
         score -= 120
@@ -1301,16 +1368,11 @@ def _entry_candidates(plans: list[StockPlan]) -> list[StockPlan]:
 
 
 def _watch_candidates(plans: list[StockPlan]) -> list[StockPlan]:
-    return [
-        plan
-        for plan in plans
-        if not _is_entry_candidate(plan)
-        and plan.recommendation_state in {"WATCH_PULLBACK", "WATCH_RECLAIM", "TREND_WEAK"}
-    ]
+    return [plan for plan in plans if plan.candidate_grade == "B급"]
 
 
 def _chase_candidates(plans: list[StockPlan]) -> list[StockPlan]:
-    return [plan for plan in plans if plan.recommendation_state == "CHASE_RISK"]
+    return [plan for plan in plans if plan.candidate_grade == "C급"]
 
 
 def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
@@ -1318,15 +1380,15 @@ def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
     if not top_plans:
         return "\n".join(
             [
-                "오늘 진입 검토 TOP 5",
+                "오늘 진입 검토 TOP 5 (A급)",
                 "현재 기준으로 바로 진입 검토할 후보가 없습니다.",
-                "거래량, 손익비, 손절폭 중 하나라도 부족하면 상단 후보에서 제외하고 관찰 후보로만 둡니다.",
+                "거래량 1.2배, 손익비 1.5R, 손절폭 5% 이내, 20일선 근처 조건 중 하나라도 부족하면 A급에서 제외합니다.",
             ]
         )
     lines = [
-        "오늘 진입 검토 TOP 5",
-        "|종목|검증 상태|N/T/P/E|지금 진입 가능 여부|비중 판단|시작 비중|손익비|시작 진입가|추가 진입가|확인 진입가|무효화 가격|1차 목표가|한 줄 이유|",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "오늘 진입 검토 TOP 5 (A급)",
+        "|종목|등급|섹터|진입 방식|시작 진입가|무효화 가격|1차 목표가|손익비|거래량|시작 비중|주의점|",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for plan in top_plans:
         lines.append(
@@ -1334,17 +1396,15 @@ def _format_top_action_table(plans: list[StockPlan], limit: int = 5) -> str:
             + "|".join(
                 [
                     f"{plan.name}({plan.symbol})",
-                    plan.recommendation_label,
-                    f"{plan.news_score}/{plan.trend_score}/{plan.position_score}/{plan.entry_score}",
-                    plan.entry_action,
-                    plan.position_mode,
-                    _format_weight(plan),
-                    _format_risk_reward(plan.risk_reward_ratio),
+                    plan.candidate_grade,
+                    plan.sector,
+                    plan.entry_style,
                     _money_or_none(plan.start_entry_price),
-                    _money_or_none(plan.add_entry_price),
-                    _money_or_none(plan.confirm_entry_price),
                     _money(plan.invalidation_price),
                     _format_target(plan),
+                    _format_risk_reward(plan.risk_reward_ratio),
+                    f"{plan.volume_status} {_ratio_text(plan.volume_ratio)}",
+                    _format_weight(plan),
                     plan.top_reason,
                 ]
             )
@@ -1359,8 +1419,8 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
     lines = [title]
     lines.extend(
         [
-            "|종목|유형|현재가|20일선 거리|거래량 상태|검증 상태|뉴스/추세/위치/진입|구름 위치|기술 트리거|차트 신뢰도|오늘 매력도|지금 진입 가능 여부|비중 판단|시작 비중|최대 시작 비중|손익비|손익비 등급|1차 목표가|시작 진입가|추가 진입가|확인 진입가|무효화 가격|손절폭|",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "|종목|등급|진입 방식|유형|현재가|20일선 거리|거래량 상태|검증 상태|뉴스/추세/위치/진입|구름 위치|기술 트리거|차트 신뢰도|오늘 매력도|지금 진입 가능 여부|비중 판단|시작 비중|최대 시작 비중|손익비|손익비 등급|1차 목표가|시작 진입가|추가 진입가|확인 진입가|무효화 가격|손절폭|",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for plan in plans:
@@ -1369,6 +1429,8 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
             + "|".join(
                 [
                     f"{plan.name}({plan.symbol})",
+                    plan.candidate_grade,
+                    plan.entry_style,
                     plan.setup_type,
                     f"{_money(plan.close)} {format_change(plan.change_percent)}",
                     _distance_text(plan.ma20_distance_percent),
@@ -1398,6 +1460,7 @@ def _format_plan_list(title: str, plans: list[StockPlan]) -> str:
     for index, plan in enumerate(plans, start=1):
         lines.extend([
             f"{index}. {plan.name}({plan.symbol}) / {plan.sector} / {plan.entry_action} / 시작 비중 {_format_weight(plan)}",
+            f"   후보 등급: {plan.candidate_grade} / 진입 방식: {plan.entry_style}",
             f"   추천 상태: {plan.recommendation_label}({plan.recommendation_state}) / 종합 {plan.overall_score}점",
             f"   검증 점수: 뉴스 {plan.news_score}, 추세 {plan.trend_score}, 위치 {plan.position_score}, 진입 {plan.entry_score}",
             f"   기술 검증: 20일선 거리 {_distance_text(plan.ma20_distance_percent)}, 20일선 기울기 {_distance_text(plan.ma20_slope_percent)}, 60일선 거리 {_distance_text(plan.ma60_distance_percent)}, 구름 위치 {_ichimoku_label(plan.ichimoku_position)}, 트리거 {_technical_trigger_label(plan.technical_trigger)}",
@@ -1455,6 +1518,8 @@ def _plan_signal(plan: StockPlan, target_date: date) -> dict[str, Any]:
         "overall_score": plan.overall_score,
         "recommendation_state": plan.recommendation_state,
         "recommendation_label": plan.recommendation_label,
+        "candidate_grade": plan.candidate_grade,
+        "entry_style": plan.entry_style,
         "technical_trigger": plan.technical_trigger,
         "technical_trigger_label": _technical_trigger_label(plan.technical_trigger),
         "validation_warning": plan.validation_warning,
@@ -1533,12 +1598,12 @@ def build_investment_package(snapshot: MarketSnapshot, sectors: list[Quote], new
         f"- 강하게 볼 섹터: {strong_names}\n"
         f"- 조심할 섹터: {weak_names}\n"
         "- 후보 범위: 전일 가장 강했던 상위 3개 섹터 안에서만 종목을 찾습니다.\n"
-        "- 원칙: 뉴스가 좋아도 거래량, 20일선 위치, 손익비, 손절폭이 맞지 않으면 진입 후보로 올리지 않습니다.\n"
-        "- 상단 TOP 5는 관심종목이 아니라 오늘 실제 진입 검토가 가능한 후보만 보여줍니다.",
+        "- A급 조건: 20일선 -2%~+5%, 거래량 1.2배 이상, 손익비 1.5R 이상, 손절폭 5% 이하, 최근 5일 과열 아님.\n"
+        "- B급은 조건부 관찰, C급은 추격 위험/제외로 봅니다. 상단 TOP 5는 A급만 보여줍니다.",
         _format_top_action_table(interest_plans),
-        _format_optional_plan_list("오늘 진입 검토 후보", entry_plans),
-        _format_optional_plan_list("관찰 후보", watch_plans),
-        _format_optional_plan_list("추격 위험 후보", chase_plans),
+        _format_optional_plan_list("A급: 오늘 진입 검토", entry_plans),
+        _format_optional_plan_list("B급: 조건부 관찰", watch_plans),
+        _format_optional_plan_list("C급: 추격 위험/제외", chase_plans),
         _format_plan_list("비선호 후보", avoid_plans),
         "주의\n개인 맞춤 투자자문이 아니라 규칙 기반 시장 참고자료입니다. 실제 주문 전 호가, 거래량, 실적 일정, 뉴스 원문을 다시 확인하세요.",
     ]

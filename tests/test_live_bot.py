@@ -121,6 +121,8 @@ class LiveBotMessageTests(unittest.TestCase):
             max_start_weight_percent = 30
             risk_reward_ratio = 2.2
             risk_reward_grade = "우수"
+            candidate_grade = "A급"
+            entry_style = "눌림 진입형"
             start_entry_price = 100.0
             add_entry_price = 101.0
             confirm_entry_price = 102.0
@@ -144,6 +146,8 @@ class LiveBotMessageTests(unittest.TestCase):
         self.assertIn("추천 상태", text)
         self.assertIn("검증 점수", text)
         self.assertIn("기술 검증", text)
+        self.assertIn("A급", text)
+        self.assertIn("눌림 진입형", text)
         self.assertIn("손익비 우수", text)
         self.assertNotIn("매수 추천", text)
         self.assertNotIn("풀매수 가능", text)

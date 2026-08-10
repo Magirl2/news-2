@@ -172,6 +172,24 @@ class SelectionReviewTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.bucket, "구버전 관심목록(진입 기준 없음)")
 
+    def test_candidate_grade_and_entry_style_are_used_as_bucket(self) -> None:
+        signal = {
+            "date": "2026-07-01",
+            "symbol": "AMD",
+            "close": 100,
+            "invalidation_price": 95,
+            "first_target_price": 110,
+            "candidate_grade": "A급",
+            "entry_style": "눌림 진입형",
+        }
+        rows = [_row(1, 100), _row(2, 103), _row(3, 105)]
+
+        result = evaluate_signal(signal, "interest", rows, horizon=5)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.bucket, "A급 / 눌림 진입형")
+
     def test_render_selection_review_includes_summary_and_detail(self) -> None:
         signal = {
             "date": "2026-07-01",

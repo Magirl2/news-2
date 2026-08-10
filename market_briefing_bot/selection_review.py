@@ -71,6 +71,12 @@ def _r_text(value: float | None) -> str:
 
 
 def _signal_bucket(signal: dict[str, Any], section: str) -> str:
+    candidate_grade = str(signal.get("candidate_grade") or "").strip()
+    entry_style = str(signal.get("entry_style") or "").strip()
+    if candidate_grade and entry_style:
+        return f"{candidate_grade} / {entry_style}"
+    if candidate_grade:
+        return candidate_grade
     state = str(signal.get("recommendation_state") or "").strip()
     if state:
         return state

@@ -1089,7 +1089,7 @@ def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
 
 
 def _report_badge_class(cell: str) -> str | None:
-    if cell == "진입 후보":
+    if cell in {"진입 후보", "오늘 진입 검토"}:
         return "report-badge action-ok"
     if cell in {"눌림 관찰", "20일선 회복 대기"}:
         return "report-badge action-wait"
@@ -1121,11 +1121,11 @@ def _report_badge_class(cell: str) -> str | None:
         return "report-badge rr-normal"
     if cell == "나쁨":
         return "report-badge rr-bad"
-    if cell.startswith("A("):
+    if cell == "A급" or cell.startswith("A("):
         return "report-badge grade-a"
-    if cell.startswith("B("):
+    if cell == "B급" or cell.startswith("B("):
         return "report-badge grade-b"
-    if cell.startswith("C("):
+    if cell == "C급" or cell.startswith("C("):
         return "report-badge grade-c"
     return None
 
