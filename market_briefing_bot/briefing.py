@@ -1154,6 +1154,9 @@ def _render_report_body_lines(lines: list[str]) -> str:
             return
         header = table_rows[0]
         body = table_rows[1:]
+        is_wide = len(header) >= 8
+        wrap_class = "report-table-wrap report-table-wrap-wide" if is_wide else "report-table-wrap"
+        table_class = "report-table report-table-wide" if is_wide else "report-table"
         head_html = "".join(f"<th>{html.escape(cell)}</th>" for cell in header)
 
         def td_html(index: int, cell: str) -> str:
@@ -1165,7 +1168,7 @@ def _render_report_body_lines(lines: list[str]) -> str:
             for row in body
         )
         html_parts.append(
-            f'<div class="report-table-wrap"><table class="report-table"><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table></div>'
+            f'<div class="{wrap_class}"><table class="{table_class}"><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table></div>'
         )
         table_rows = []
 
@@ -1378,11 +1381,12 @@ def _write_html_report(
       --page-x: 18px;
       --panel-pad: 22px;
       --section-gap: 16px;
+      --content-max: 1240px;
     }}
     * {{ box-sizing: border-box; }}
     html {{ -webkit-text-size-adjust: 100%; }}
     body {{ margin: 0; font-family: Arial, 'Malgun Gothic', sans-serif; background: var(--bg); color: var(--ink); overflow-x: hidden; }}
-    main {{ width: 100%; max-width: 1120px; margin: 0 auto; padding: 28px var(--page-x) 56px; }}
+    main {{ width: 100%; max-width: var(--content-max); margin: 0 auto; padding: 28px var(--page-x) 56px; }}
     .hero {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; margin-bottom: var(--section-gap); }}
     .eyebrow {{ margin: 0 0 8px; color: var(--blue); font-size: 13px; font-weight: 700; }}
     h1 {{ margin: 0; font-size: clamp(26px, 4vw, 42px); line-height: 1.15; letter-spacing: 0; }}
@@ -1475,10 +1479,10 @@ def _write_html_report(
     .signal-block ul {{ margin: 8px 0 0; padding-left: 20px; }}
     .signal-block li {{ margin: 4px 0; padding: 0; border: 0; border-radius: 0; background: transparent; line-height: 1.45; }}
     a {{ color: var(--blue); text-decoration: none; font-weight: 700; }}
-    .report-flow {{ display: grid; gap: 0; }}
-    .report-section {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: var(--panel-pad); margin-top: var(--section-gap); line-height: 1.65; overflow-wrap: anywhere; }}
+    .report-flow {{ display: grid; gap: var(--section-gap); min-width: 0; }}
+    .report-section {{ min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: var(--panel-pad); margin-top: 0; line-height: 1.65; overflow-wrap: anywhere; box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04); }}
     .report-section h2 {{ margin-top: 0; }}
-    .report-section p {{ margin: 8px 0; }}
+    .report-section p {{ margin: 8px 0; max-width: 92ch; }}
     .report-heading {{ background: #111827; color: #fff; border-color: #111827; }}
     .report-heading h2 {{ margin: 0; }}
     .report-decision {{ border-left: 6px solid var(--blue); background: #f8fbff; }}
@@ -1488,11 +1492,15 @@ def _write_html_report(
     .report-negative {{ border-left: 6px solid var(--red); }}
     .report-list {{ margin: 8px 0 12px; padding-left: 20px; }}
     .report-list li {{ margin: 6px 0; }}
-    .report-table-wrap {{ width: 100%; overflow-x: auto; margin: 10px 0 16px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fff; }}
-    .report-table {{ width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px; }}
+    .report-table-wrap {{ width: 100%; max-width: 100%; overflow-x: auto; margin: 10px 0 16px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fff; -webkit-overflow-scrolling: touch; }}
+    .report-table {{ width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; }}
+    .report-table-wide {{ width: max-content; min-width: 100%; }}
     .report-table th, .report-table td {{ padding: 9px 10px; border-bottom: 1px solid #edf0f5; text-align: left; vertical-align: top; }}
-    .report-table th {{ background: #f8fafc; color: #344054; font-weight: 800; white-space: nowrap; }}
-    .report-table td {{ color: #1d2939; line-height: 1.45; }}
+    .report-table th {{ background: #f8fafc; color: #344054; font-weight: 800; white-space: normal; line-height: 1.25; }}
+    .report-table td {{ color: #1d2939; line-height: 1.45; max-width: 280px; overflow-wrap: anywhere; }}
+    .report-table td:first-child, .report-table th:first-child {{ position: sticky; left: 0; z-index: 1; background: #fff; box-shadow: 1px 0 0 #edf0f5; }}
+    .report-table th:first-child {{ background: #f8fafc; z-index: 2; }}
+    .report-table-wide td:last-child {{ max-width: 420px; }}
     .report-badge {{ display: inline-flex; align-items: center; min-height: 22px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; font-weight: 800; line-height: 1; white-space: nowrap; }}
     .action-ok, .grade-a {{ background: #ecfdf3; color: #067647; border-color: #abefc6; }}
     .action-wait, .grade-b {{ background: #fffaeb; color: #b54708; border-color: #fedf89; }}
@@ -1505,7 +1513,7 @@ def _write_html_report(
     .numbered-line {{ margin-top: 16px !important; padding-top: 14px; border-top: 1px solid #edf0f5; font-weight: 700; }}
     .key-line strong {{ display: inline-block; min-width: 86px; color: #344054; }}
     footer {{ margin-top: 24px; color: var(--muted); font-size: 13px; text-align: center; }}
-    @media (max-width: 680px) {{
+    @media (max-width: 900px) {{
       :root {{
         --page-x: 10px;
         --panel-pad: 14px;
@@ -1543,13 +1551,15 @@ def _write_html_report(
       }}
       .report-list {{ padding-left: 17px; }}
       .key-line strong {{ display: block; min-width: 0; margin-bottom: 2px; }}
-      .report-table-wrap {{
+      .report-flow {{ gap: 10px; }}
+      .report-section p {{ max-width: none; }}
+      .report-table-wrap, .report-table-wrap-wide {{
         overflow-x: visible;
         border: 0;
         background: transparent;
         margin: 10px 0 12px;
       }}
-      .report-table {{
+      .report-table, .report-table-wide {{
         display: block;
         min-width: 0;
         width: 100%;
@@ -1568,10 +1578,15 @@ def _write_html_report(
       }}
       .report-table td {{
         display: grid;
-        grid-template-columns: minmax(92px, 38%) 1fr;
+        grid-template-columns: minmax(96px, 34%) minmax(0, 1fr);
         gap: 8px;
         padding: 9px 10px;
         border-bottom: 1px solid #edf0f5;
+        max-width: none;
+      }}
+      .report-table td:first-child, .report-table th:first-child {{
+        position: static;
+        box-shadow: none;
       }}
       .report-table td:last-child {{ border-bottom: 0; }}
       .report-table td::before {{

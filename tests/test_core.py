@@ -1019,6 +1019,17 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn('data-label=', rendered)
         self.assertIn(">AMD</td>", rendered)
 
+    def test_wide_markdown_table_gets_responsive_class(self) -> None:
+        rendered = _render_report_sections(
+            "오늘 바로 볼 종목 TOP 5\n"
+            "|종목|검증 상태|N/T/P/E|지금 진입 가능 여부|비중 판단|시작 비중|손익비|시작 진입가|추가 진입가|\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            "|AMD|진입 후보|70/80/80/75|지금 소량 가능|손익비 우수|30%|2.1R|$100|$101|"
+        )
+
+        self.assertIn("report-table-wrap-wide", rendered)
+        self.assertIn("report-table-wide", rendered)
+
     def test_investment_action_and_grade_cells_render_as_badges(self) -> None:
         rendered = _render_report_sections(
             "투자 후보\n"
