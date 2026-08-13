@@ -1248,6 +1248,14 @@ def _render_report_sections(text: str) -> str:
     return "\n".join(sections)
 
 
+def _report_css_text() -> str:
+    css_path = Path(__file__).with_name("report.css")
+    try:
+        return css_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def _write_html_report(
     report_path: Path,
     text: str,
@@ -1362,6 +1370,7 @@ def _write_html_report(
     news_dashboard = _news_dashboard_html(snapshot, news_items)
     quick_summary = _mobile_quick_summary_html(snapshot, sectors, news_items, watchlist_actions)
     chart_section = _market_charts_html(snapshot, sectors)
+    report_css = _report_css_text()
     html_text = f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -1601,6 +1610,7 @@ def _write_html_report(
         line-height: 1.2;
       }}
     }}
+    {report_css}
   </style>
 </head>
 <body>
