@@ -21,8 +21,10 @@ from market_briefing_bot.briefing import (
     _quick_takeaways_text,
     _report_badge_class,
     _render_report_sections,
+    _risk_card,
     _sector_driver,
     _sector_score_report,
+    _sector_scoreboard_html,
     _sector_scorecards,
     _warnings_block,
 )
@@ -558,6 +560,32 @@ class SectorReasonTests(unittest.TestCase):
         self.assertIn("금리", text)
         self.assertIn("수급", text)
 
+    def test_risk_card_explains_indicator_meaning_and_reading_order(self) -> None:
+        target = date(2026, 7, 7)
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "SPY", target, 99, 100, -1.0, "test"),
+                "Nasdaq": Quote("Nasdaq", "QQQ", target, 98, 100, -2.0, "test"),
+            },
+            sector_quotes={},
+            risk_quotes={
+                "VIX": Quote("VIX", "^VIX", target, 18, 16, 12.5, "test"),
+                "10Y Yield": Quote("10Y Yield", "^TNX", target, 4.5, 4.4, 2.3, "test"),
+                "Dollar": Quote("Dollar", "DXY", target, 101, 100, 1.0, "test"),
+                "Oil": Quote("Oil", "CL=F", target, 82, 80, 2.5, "test"),
+            },
+            warnings=[],
+        )
+
+        text = _risk_card(snapshot)
+
+        self.assertIn("한줄 판정", text)
+        self.assertIn("지표별 해설", text)
+        self.assertIn("공포지수가 빠르게 올라", text)
+        self.assertIn("다음날 읽는 순서", text)
+        self.assertIn("|지표|현재|당일 변화|쉽게 읽기|", text)
+
     def test_quick_takeaways_show_three_decision_lines(self) -> None:
         snapshot = MarketSnapshot(
             target_date=date(2026, 7, 7),
@@ -969,6 +997,39 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertIn("판정: 성공", text)
         self.assertIn("매수 가격 도달", text)
         self.assertIn("다음 대응", text)
+        self.assertIn("오늘의 이야기", text)
+        self.assertIn("종가 변동 차트", text)
+
+    def test_previous_signal_review_uses_interest_bucket_even_when_stance_is_action_label(self) -> None:
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 3),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        previous = {
+            "target_date": "2026-07-02",
+            "interest": [
+                {
+                    "stance": "눌림 확인 후 가능",
+                    "symbol": "NVDA",
+                    "name": "엔비디아",
+                    "close": 100.0,
+                    "score": 80,
+                    "entry_price": 105.0,
+                    "stop_price": 95.0,
+                }
+            ],
+            "avoid": [],
+        }
+        rows = [{"date": date(2026, 7, 3), "close": 106.0}]
+        with patch("market_briefing_bot.investment_plan.fetch_yahoo_daily", return_value=rows):
+            text, warnings = build_previous_signal_review(snapshot, previous)
+
+        self.assertFalse(warnings)
+        self.assertIn("매수 가격 도달", text)
+        self.assertNotIn("비선호 해제", text)
 
     def test_previous_signal_review_marks_avoid_success_and_summary(self) -> None:
         snapshot = MarketSnapshot(
@@ -1000,7 +1061,7 @@ class InvestmentPlanTests(unittest.TestCase):
 
         self.assertFalse(warnings)
         self.assertIn("요약: 성공 1 / 실패 0 / 보류 0", text)
-        self.assertIn("비선호 후보 평가", text)
+        self.assertIn("비선호군 1개 중 회피 판단 적중 1개", text)
         self.assertIn("판정: 성공", text)
         self.assertIn("회피 판단 유효", text)
         self.assertIn("다음 대응", text)
@@ -1072,6 +1133,36 @@ class KakaoDeliveryTextTests(unittest.TestCase):
 
 
 class HtmlReportTests(unittest.TestCase):
+    def test_sector_scoreboard_prioritizes_six_and_collapses_details(self) -> None:
+        target = date(2026, 7, 7)
+        names = [
+            "Technology",
+            "Financials",
+            "Health Care",
+            "Consumer Discretionary",
+            "Energy",
+            "Utilities",
+            "Materials",
+        ]
+        sectors = [
+            Quote(name, f"S{index}", target, 100 + index, 100, 3.0 - index, "test")
+            for index, name in enumerate(names)
+        ]
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={},
+            sector_quotes={quote.name: quote for quote in sectors},
+            risk_quotes={},
+            warnings=[],
+        )
+
+        rendered = _sector_scoreboard_html(snapshot, sectors, [])
+
+        self.assertIn("먼저 볼 3", rendered)
+        self.assertIn("경계할 3", rendered)
+        self.assertIn("세부 점수 보기", rendered)
+        self.assertEqual(rendered.count('class="scoreboard-row '), 6)
+
     def test_report_sections_are_not_rendered_as_raw_message_pre(self) -> None:
         rendered = _render_report_sections(
             "Market summary\nLine one\n\n뉴스 1/5 [Market]\nSkipped duplicate\n\nAction report\n- point one"
@@ -1120,6 +1211,9 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("report-badge grade-c", rendered)
 
     def test_report_badge_class_maps_actions_and_grades(self) -> None:
+        self.assertEqual(_report_badge_class("성공"), "report-badge tracking-success")
+        self.assertEqual(_report_badge_class("실패"), "report-badge tracking-failure")
+        self.assertEqual(_report_badge_class("보류"), "report-badge tracking-hold")
         self.assertEqual(_report_badge_class("지금 소량 가능"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("추격 금지"), "report-badge action-risk")
         self.assertEqual(_report_badge_class("A(85)"), "report-badge grade-a")

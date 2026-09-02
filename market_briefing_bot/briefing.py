@@ -308,12 +308,104 @@ def _risk_regime(snapshot: MarketSnapshot) -> tuple[str, str]:
 
 def _risk_card(snapshot: MarketSnapshot) -> str:
     regime, action = _risk_regime(snapshot)
-    return (
-        "위험판\n"
-        f"판단: {regime}\n"
-        f"지표: {_quote_line(snapshot.risk_quotes, ['VIX', '10Y Yield', 'Dollar', 'Oil'])}\n"
-        f"해석: {action}"
+    index_changes = [quote.change_percent for quote in snapshot.index_quotes.values()]
+    avg_index = sum(index_changes) / len(index_changes) if index_changes else 0.0
+    risk_rows = []
+    headwinds: list[str] = []
+    tailwinds: list[str] = []
+
+    for name in ("VIX", "10Y Yield", "Dollar", "Oil"):
+        quote = snapshot.risk_quotes.get(name)
+        if not quote:
+            continue
+        label = RISK_KO.get(name, name)
+        value = _risk_value(name, quote)
+        reading, direction = _risk_indicator_read(name, quote)
+        if direction == "부담":
+            headwinds.append(label)
+        elif direction == "완화":
+            tailwinds.append(label)
+        risk_rows.append(
+            f"|{label}|{value}|{format_change(quote.change_percent)}|{reading}|"
+        )
+
+    if headwinds and tailwinds:
+        signal_mix = (
+            f"{'·'.join(headwinds)}는 부담이고 {'·'.join(tailwinds)}는 완화 신호라 "
+            "한 방향으로 크게 베팅하기보다 지수 반응을 함께 봐야 합니다."
+        )
+    elif headwinds:
+        signal_mix = (
+            f"{'·'.join(headwinds)}가 동시에 부담을 주고 있어 반등이 나와도 "
+            "추격 매수보다 방어 기준이 우선입니다."
+        )
+    elif tailwinds:
+        signal_mix = (
+            f"{'·'.join(tailwinds)}가 위험 부담을 낮추고 있습니다. 다만 실제 위험선호는 "
+            "나스닥과 강세 섹터의 거래량까지 확인돼야 인정할 수 있습니다."
+        )
+    else:
+        signal_mix = "위험지표가 뚜렷하게 한쪽으로 기울지 않아 지수와 섹터 가격을 우선합니다."
+
+    table = [
+        "|지표|현재|당일 변화|쉽게 읽기|",
+        "|---|---|---|---|",
+        *risk_rows,
+    ]
+    if not risk_rows:
+        table = ["위험지표 데이터를 충분히 가져오지 못했습니다."]
+
+    return "\n".join(
+        [
+            "위험판",
+            f"한줄 판정: {regime} — {action}",
+            (
+                f"왜 이렇게 봤나: 주요 지수 평균이 {format_change(avg_index)}였고, "
+                f"위험지표를 함께 놓고 보면 {signal_mix}"
+            ),
+            "지표별 해설",
+            *table,
+            "다음날 읽는 순서: 1) VIX가 전일 급등분을 되돌리는지 2) 10년물 금리와 달러가 같이 오르는지 3) 유가 움직임이 에너지 강세를 넘어 물가 부담으로 번지는지 확인합니다.",
+            f"행동 기준: {action}. 지수 반등과 VIX 안정이 같이 나오기 전에는 포지션 크기를 먼저 제한합니다.",
+        ]
     )
+
+
+def _risk_value(name: str, quote: Quote) -> str:
+    if name == "10Y Yield":
+        return f"{quote.close:.2f}%"
+    if name == "Oil":
+        return f"${quote.close:.2f}"
+    return f"{quote.close:.2f}"
+
+
+def _risk_indicator_read(name: str, quote: Quote) -> tuple[str, str]:
+    change = quote.change_percent
+    if name == "VIX":
+        if change >= 5:
+            return "공포지수가 빠르게 올라 단기 변동성과 손절 위험이 커졌습니다.", "부담"
+        if change <= -5:
+            return "공포가 빠르게 진정돼 위험자산에는 숨통이 트이는 신호입니다.", "완화"
+        return "변동성 변화가 제한적이라 다른 지표와 함께 봐야 합니다.", "중립"
+    if name == "10Y Yield":
+        if change >= 1:
+            return "장기금리 상승은 고PER 성장주와 금리민감 섹터의 할인율 부담을 키웁니다.", "부담"
+        if change <= -1:
+            return "장기금리 하락은 성장주 밸류에이션 부담을 덜어줍니다.", "완화"
+        return "금리 변화가 작아 당일 섹터 영향은 제한적입니다.", "중립"
+    if name == "Dollar":
+        if change >= 0.4:
+            return "달러 강세는 글로벌 유동성과 해외매출 비중이 큰 기업에 부담입니다.", "부담"
+        if change <= -0.4:
+            return "달러 약세는 위험자산과 해외매출 기업에 비교적 우호적입니다.", "완화"
+        return "달러 방향은 아직 시장을 압도할 정도로 강하지 않습니다.", "중립"
+    if name == "Oil":
+        if change >= 2:
+            return "유가 급등은 에너지주에는 호재지만 시장 전체에는 물가·금리 부담이 될 수 있습니다.", "부담"
+        if change <= -2:
+            return "유가 하락은 물가 부담을 낮추지만 에너지주에는 역풍입니다.", "완화"
+        return "유가 변화가 작아 에너지와 물가 해석 모두 중립에 가깝습니다.", "중립"
+    return "다른 시장 지표와 함께 확인해야 합니다.", "중립"
 
 
 def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[NewsItem]) -> str:
@@ -636,6 +728,34 @@ def _sector_total_summary(total_score: int) -> str:
     return "중립 확인"
 
 
+def _sector_focus_reason(card: SectorScore) -> str:
+    components = [
+        ("가격", card.price_score),
+        ("뉴스", card.news_score),
+        ("금리", card.rate_score),
+        ("수급", card.flow_score),
+    ]
+    dominant_name, dominant_score = max(
+        components, key=lambda item: (abs(item[1]), item[1])
+    )
+    if dominant_score == 0:
+        return "어느 한 요인도 방향을 만들지 못해 가격 확인이 더 필요합니다."
+
+    same_direction = "끌어올린" if dominant_score > 0 else "끌어내린"
+    opposite = [
+        (name, score)
+        for name, score in components
+        if score and (score > 0) != (dominant_score > 0)
+    ]
+    sentence = (
+        f"{dominant_name} 점수({_format_score(dominant_score)})가 총점을 가장 크게 {same_direction} 요인입니다."
+    )
+    if opposite:
+        counter_name, counter_score = max(opposite, key=lambda item: abs(item[1]))
+        sentence += f" 다만 {counter_name} 점수({_format_score(counter_score)})는 반대 신호입니다."
+    return sentence
+
+
 def _sector_scorecards(
     snapshot: MarketSnapshot,
     sectors: list[Quote] | None = None,
@@ -681,17 +801,55 @@ def _sector_score_report(
     if not cards:
         return "섹터 점수판\n섹터 데이터를 가져오지 못해 점수화할 수 없습니다."
 
+    top_cards = cards[:3]
+    top_sectors = {card.sector for card in top_cards}
+    bottom_cards = [
+        card for card in reversed(cards) if card.sector not in top_sectors
+    ][:3]
+    selected_sectors = {card.sector for card in [*top_cards, *bottom_cards]}
+    middle_cards = [card for card in cards if card.sector not in selected_sectors]
+
     lines = [
         "섹터 점수판",
-        "총점 = 가격 점수 + 뉴스 점수 + 금리 영향 + 수급 추정입니다. +3 이상은 우위, -3 이하는 경계로 봅니다.",
+        "읽는 법: 모든 섹터를 훑지 않고 상위 3개와 하위 3개만 먼저 봅니다. 총점은 가격·뉴스·금리·수급을 합친 상대 우선순위이며, +3 이상은 우위, -3 이하는 경계입니다.",
+        (
+            "한눈에: 먼저 볼 곳은 "
+            + ", ".join(f"{card.label} {_format_score(card.total_score)}" for card in top_cards)
+            + " / 피할 곳은 "
+            + ", ".join(f"{card.label} {_format_score(card.total_score)}" for card in bottom_cards)
+        ),
+        "우선순위 3",
+        "|순위|섹터|총점|당일 등락|핵심 해석|",
+        "|---|---|---|---|---|",
     ]
-    for card in cards:
+    for rank, card in enumerate(top_cards, start=1):
         lines.append(
-            f"- {card.label}: 총점 {_format_score(card.total_score)} / "
-            f"가격 {_format_score(card.price_score)}, 뉴스 {_format_score(card.news_score)}, "
-            f"금리 {_format_score(card.rate_score)}, 수급 {_format_score(card.flow_score)} / "
-            f"{card.summary} / {card.detail}"
+            f"|{rank}|{card.label}|{_format_score(card.total_score)}|"
+            f"{format_change(card.change_percent)}|{_sector_focus_reason(card)}|"
         )
+
+    lines.extend(
+        [
+            "경계 3",
+            "|순위|섹터|총점|당일 등락|핵심 해석|",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for rank, card in enumerate(bottom_cards, start=1):
+        lines.append(
+            f"|{rank}|{card.label}|{_format_score(card.total_score)}|"
+            f"{format_change(card.change_percent)}|{_sector_focus_reason(card)}|"
+        )
+
+    if middle_cards:
+        lines.append(
+            "나머지 묶음: "
+            + ", ".join(
+                f"{card.label} {_format_score(card.total_score)}" for card in middle_cards
+            )
+            + ". 상·하위 3개에서 제외했으며, 총점 동점은 당일 등락으로 정렬합니다."
+        )
+    lines.append("세부 점수: 웹 점수판에서 필요한 섹터만 ‘세부 점수 보기’를 열어 가격·뉴스·금리·수급 근거를 확인합니다.")
     return "\n".join(lines)
 
 
@@ -1089,6 +1247,12 @@ def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
 
 
 def _report_badge_class(cell: str) -> str | None:
+    if cell == "성공":
+        return "report-badge tracking-success"
+    if cell == "실패":
+        return "report-badge tracking-failure"
+    if cell == "보류":
+        return "report-badge tracking-hold"
     if cell in {"진입 후보", "오늘 진입 검토"}:
         return "report-badge action-ok"
     if cell in {"눌림 관찰", "20일선 회복 대기"}:
@@ -1256,6 +1420,83 @@ def _report_css_text() -> str:
         return ""
 
 
+def _sector_scoreboard_html(
+    snapshot: MarketSnapshot,
+    sectors: list[Quote],
+    news_items: list[NewsItem],
+) -> str:
+    cards = _sector_scorecards(snapshot, sectors, news_items)
+    if not cards:
+        return '<p class="scoreboard-empty">섹터 데이터를 가져오지 못했습니다.</p>'
+
+    top_cards = cards[:3]
+    top_sectors = {card.sector for card in top_cards}
+    bottom_cards = [
+        card for card in reversed(cards) if card.sector not in top_sectors
+    ][:3]
+    selected_sectors = {card.sector for card in [*top_cards, *bottom_cards]}
+    middle_cards = [card for card in cards if card.sector not in selected_sectors]
+
+    def lane(title: str, description: str, lane_cards: list[SectorScore], tone: str) -> str:
+        rows = []
+        for rank, card in enumerate(lane_cards, start=1):
+            score_parts = "".join(
+                f"<span>{label}<b>{html.escape(_format_score(score))}</b></span>"
+                for label, score in (
+                    ("가격", card.price_score),
+                    ("뉴스", card.news_score),
+                    ("금리", card.rate_score),
+                    ("수급", card.flow_score),
+                )
+            )
+            rows.append(
+                f"""
+                <article class="scoreboard-row scoreboard-{tone}">
+                  <div class="scoreboard-rank">{rank}</div>
+                  <div class="scoreboard-main">
+                    <div class="scoreboard-name">
+                      <strong>{html.escape(card.label)}</strong>
+                      <span>{html.escape(format_change(card.change_percent))}</span>
+                    </div>
+                    <p>{html.escape(_sector_focus_reason(card))}</p>
+                    <details>
+                      <summary>세부 점수 보기</summary>
+                      <div class="score-parts">{score_parts}</div>
+                      <small>{html.escape(card.detail)}</small>
+                    </details>
+                  </div>
+                  <b class="scoreboard-total">{html.escape(_format_score(card.total_score))}</b>
+                </article>
+                """
+            )
+        return f"""
+        <section class="scoreboard-lane">
+          <div class="scoreboard-lane-head">
+            <h3>{html.escape(title)}</h3>
+            <p>{html.escape(description)}</p>
+          </div>
+          {''.join(rows)}
+        </section>
+        """
+
+    middle_text = ", ".join(
+        f"{card.label} {_format_score(card.total_score)}" for card in middle_cards
+    ) or "없음"
+    return f"""
+    <section class="scoreboard-shell">
+      <div class="scoreboard-intro">
+        <strong>상·하위만 먼저 읽으세요.</strong>
+        <span>가격·뉴스·금리·수급을 합친 상대 순위입니다. 전체 11개를 펼치지 않고 결정에 필요한 6개만 보여줍니다.</span>
+      </div>
+      <div class="scoreboard-lanes">
+        {lane('먼저 볼 3', '점수가 높은 순서입니다. 가격 지속성과 거래량을 다음날 확인합니다.', top_cards, 'positive')}
+        {lane('경계할 3', '점수가 낮은 순서입니다. 반등보다 약세 해소 확인이 먼저입니다.', bottom_cards, 'negative')}
+      </div>
+      <p class="scoreboard-middle"><b>나머지:</b> {html.escape(middle_text)} — 상·하위 3개에서 제외했으며, 총점 동점은 당일 등락으로 정렬합니다.</p>
+    </section>
+    """
+
+
 def _write_html_report(
     report_path: Path,
     text: str,
@@ -1296,35 +1537,7 @@ def _write_html_report(
             """
         )
 
-    sector_score_cards = []
-    for card in _sector_scorecards(snapshot, sectors, news_items):
-        if card.total_score >= 3:
-            score_class = "score-positive"
-        elif card.total_score <= -3:
-            score_class = "score-negative"
-        else:
-            score_class = "score-neutral"
-        sector_score_cards.append(
-            f"""
-            <section class="sector-score {score_class}">
-              <div class="score-top">
-                <div>
-                  <strong>{html.escape(card.label)}</strong>
-                  <span>{html.escape(format_change(card.change_percent))}</span>
-                </div>
-                <b>{html.escape(_format_score(card.total_score))}</b>
-              </div>
-              <p>{html.escape(card.summary)}</p>
-              <div class="score-parts">
-                <span>가격 <b>{html.escape(_format_score(card.price_score))}</b></span>
-                <span>뉴스 <b>{html.escape(_format_score(card.news_score))}</b></span>
-                <span>금리 <b>{html.escape(_format_score(card.rate_score))}</b></span>
-                <span>수급 <b>{html.escape(_format_score(card.flow_score))}</b></span>
-              </div>
-              <small>{html.escape(card.detail)}</small>
-            </section>
-            """
-        )
+    sector_scoreboard = _sector_scoreboard_html(snapshot, sectors, news_items)
 
     news_cards = []
     for item in news_items[:5]:
@@ -1626,7 +1839,7 @@ def _write_html_report(
     <h2>섹터맵</h2>
     <div class="grid">{''.join(sector_cards)}</div>
     <h2>섹터 점수판</h2>
-    <div class="sector-score-grid">{''.join(sector_score_cards)}</div>
+    {sector_scoreboard}
     {news_dashboard}
     <h2>주요 뉴스 분석</h2>
     <ol class="news-list">{''.join(news_cards)}</ol>

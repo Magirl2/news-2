@@ -1664,63 +1664,12 @@ def _current_close(symbol: str, target_date: date) -> float:
     return float(rows[-1]["close"])
 
 
-def _track_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> str:
-    symbol = str(signal["symbol"])
-    current_close = _current_close(symbol, snapshot.target_date)
-    previous_close = float(signal["close"])
-    change = ((current_close - previous_close) / previous_close) * 100
-    entry_price = float(signal["entry_price"])
-    stop_price = float(signal["stop_price"])
-    stance = str(signal.get("stance", ""))
-
-    if stance == "관심 후보":
-        if current_close >= entry_price:
-            state = "매수 타점 도달"
-        elif current_close <= stop_price:
-            state = "손절/무효화 기준 이탈"
-        else:
-            state = "관찰 지속"
-    else:
-        if current_close >= entry_price:
-            state = "회복 확인, 비선호 해제 검토"
-        elif current_close <= stop_price:
-            state = "약세 지속, 회피 판단 유효"
-        else:
-            state = "매수 보류 유지"
-
-    return (
-        f"- {signal.get('name', symbol)}({symbol}) / 전일 점수 {signal.get('score', '?')}/100 "
-        f"/ 현재 {_money(current_close)}({format_change(change)}) / 상태: {state}"
-    )
-
-
-def build_previous_signal_review(snapshot: MarketSnapshot, previous_signals: dict[str, Any] | None) -> tuple[str, list[str]]:
-    warnings: list[str] = []
-    if not previous_signals:
-        return "전일 후보 추적\n이전 후보 기록이 없어 오늘부터 추적을 시작합니다.", warnings
-
-    previous_date = previous_signals.get("target_date", "이전 거래일")
-    lines = [f"전일 후보 추적\n기준: {previous_date} 후보를 {snapshot.target_date.isoformat()} 종가로 점검"]
-
-    interest = previous_signals.get("interest") or []
-    avoid = previous_signals.get("avoid") or []
-    if interest:
-        lines.append("관심 후보 점검")
-        for signal in interest:
-            try:
-                lines.append(_track_signal(signal, snapshot))
-            except Exception as exc:  # noqa: BLE001
-                warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
-    if avoid:
-        lines.append("비선호 후보 점검")
-        for signal in avoid:
-            try:
-                lines.append(_track_signal(signal, snapshot))
-            except Exception as exc:  # noqa: BLE001
-                warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
-    return "\n".join(lines), warnings
-
-def _evaluate_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> dict[str, Any]:
+def _evaluate_signal(
+    signal: dict[str, Any],
+    snapshot: MarketSnapshot,
+    *,
+    is_interest: bool | None = None,
+) -> dict[str, Any]:
     symbol = str(signal["symbol"])
     current_close = _current_close(symbol, snapshot.target_date)
     previous_close = float(signal["close"])
@@ -1729,7 +1678,9 @@ def _evaluate_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> dict[s
     stop_price = float(signal["stop_price"])
     support_price = float(signal.get("support_price", previous_close))
     stance = str(signal.get("stance", ""))
-    is_interest = "관심" in stance or "愿" in stance
+    if is_interest is None:
+        is_interest = "관심" in stance or "愿" in stance
+    tracking_type = "관심" if is_interest else "비선호"
 
     if is_interest:
         if current_close >= entry_price:
@@ -1776,6 +1727,7 @@ def _evaluate_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> dict[s
         "symbol": symbol,
         "name": signal.get("name", symbol),
         "stance": stance,
+        "tracking_type": tracking_type,
         "score": signal.get("score", "?"),
         "current_close": current_close,
         "previous_close": previous_close,
@@ -1792,16 +1744,139 @@ def _evaluate_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> dict[s
 
 def _format_tracked_signal(result: dict[str, Any]) -> str:
     return (
-        f"- {result['name']}({result['symbol']}) / 전일 점수 {result['score']}/100 "
-        f"/ 현재 {_money(float(result['current_close']))}({format_change(float(result['change']))}) "
-        f"/ 판정: {result['verdict']} / 상태: {result['state']}\n"
-        f"  이유: {result['reason']}\n"
-        f"  다음 대응: {result['next_action']}"
+        f"- {result['name']}({result['symbol']}) "
+        f"{_tracking_bar(float(result['change']))} / {result['tracking_type']} / "
+        f"판정: {result['verdict']} — {_tracking_read(result)}"
     )
 
 
 def _track_signal(signal: dict[str, Any], snapshot: MarketSnapshot) -> str:
     return _format_tracked_signal(_evaluate_signal(signal, snapshot))
+
+
+def _tracking_bar(change: float, max_units: int = 8) -> str:
+    if abs(change) < 0.05:
+        return f"→ · {format_change(change)}"
+    units = max(1, min(max_units, int(round(abs(change)))))
+    arrow = "↑" if change > 0 else "↓"
+    return f"{arrow} {'█' * units} {format_change(change)}"
+
+
+def _distance_percent(current: float, level: float) -> float:
+    if current <= 0:
+        return 0.0
+    return abs(level - current) / current * 100
+
+
+def _tracking_read(result: dict[str, Any]) -> str:
+    current = float(result["current_close"])
+    entry = float(result["entry_price"])
+    stop = float(result["stop_price"])
+    support = float(result["support_price"])
+    verdict = str(result["verdict"])
+    tracking_type = str(result["tracking_type"])
+    state = str(result["state"])
+
+    if tracking_type == "관심":
+        if verdict == "성공":
+            excess = max(0.0, (current - entry) / entry * 100) if entry else 0.0
+            return (
+                f"{state}. 매수 기준 {_money(entry)}를 {excess:.1f}% 웃돌았습니다. "
+                f"이제 {_money(support)} 지지가 유지되는지가 핵심입니다."
+            )
+        if verdict == "실패":
+            breach = max(0.0, (stop - current) / stop * 100) if stop else 0.0
+            return (
+                f"{state}. 무효화선 {_money(stop)}를 {breach:.1f}% 밑돌아 "
+                f"{_money(entry)} 회복 전까지 아이디어를 닫습니다."
+            )
+        return (
+            f"{state}. 매수 기준까지 {_distance_percent(current, entry):.1f}%, "
+            f"무효화선까지 {_distance_percent(current, stop):.1f}% 남은 대기 구간입니다."
+        )
+
+    if verdict == "성공":
+        breach = max(0.0, (stop - current) / stop * 100) if stop else 0.0
+        return (
+            f"{state}. 약세 확인선 {_money(stop)}를 {breach:.1f}% 밑돌아 "
+            f"전일 회피 판단이 유효했습니다."
+        )
+    if verdict == "실패":
+        excess = max(0.0, (current - entry) / entry * 100) if entry else 0.0
+        return (
+            f"{state}. 회복선 {_money(entry)}를 {excess:.1f}% 넘어 "
+            f"전일 약세 판단을 해제할 근거가 생겼습니다."
+        )
+    return (
+        f"{state}. 회복선까지 {_distance_percent(current, entry):.1f}%, "
+        f"약세 확인선까지 {_distance_percent(current, stop):.1f}%인 중간 구간입니다."
+    )
+
+
+def _tracking_story(results: list[dict[str, Any]]) -> str:
+    interest = [result for result in results if result["tracking_type"] == "관심"]
+    avoid = [result for result in results if result["tracking_type"] == "비선호"]
+
+    def count(items: list[dict[str, Any]], verdict: str) -> int:
+        return sum(1 for item in items if item["verdict"] == verdict)
+
+    clauses = []
+    if interest:
+        clauses.append(
+            f"관심군 {len(interest)}개 중 매수 조건 도달 {count(interest, '성공')}개, "
+            f"무효화 {count(interest, '실패')}개, 대기 {count(interest, '보류')}개"
+        )
+    if avoid:
+        clauses.append(
+            f"비선호군 {len(avoid)}개 중 회피 판단 적중 {count(avoid, '성공')}개, "
+            f"회복으로 판단 해제 {count(avoid, '실패')}개, 대기 {count(avoid, '보류')}개"
+        )
+
+    strongest = max(results, key=lambda item: float(item["change"]))
+    weakest = min(results, key=lambda item: float(item["change"]))
+    return (
+        "; ".join(clauses)
+        + f"입니다. 가장 강한 종목은 {strongest['name']} {format_change(float(strongest['change']))}, "
+        + f"가장 약한 종목은 {weakest['name']} {format_change(float(weakest['change']))}로 "
+        + "전일 점수보다 실제 종가 반응을 우선해 다음 판단을 갱신해야 합니다."
+    )
+
+
+def _tracking_table(results: list[dict[str, Any]]) -> list[str]:
+    changed = [result for result in results if result["verdict"] != "보류"]
+    if not changed:
+        return ["판정이 바뀐 후보가 없습니다."]
+    changed.sort(key=lambda item: abs(float(item["change"])), reverse=True)
+    lines = [
+        "|종목|출발 관점|변동 차트|판정|무슨 뜻|다음 대응|",
+        "|---|---|---|---|---|---|",
+    ]
+    for result in changed:
+        lines.append(
+            f"|{result['name']}({result['symbol']})|{result['tracking_type']}|"
+            f"{_tracking_bar(float(result['change']))}|{result['verdict']}|"
+            f"{_tracking_read(result)}|{result['next_action']}|"
+        )
+    return lines
+
+
+def _tracking_hold_line(results: list[dict[str, Any]], tracking_type: str) -> str:
+    holds = [
+        result
+        for result in results
+        if result["tracking_type"] == tracking_type and result["verdict"] == "보류"
+    ]
+    if not holds:
+        return f"- {tracking_type}: 보류 후보 없음"
+    items = ", ".join(
+        f"{result['symbol']} {format_change(float(result['change']))}"
+        for result in holds
+    )
+    if tracking_type == "관심":
+        guide = "매수 기준과 무효화선 사이이므로 돌파 또는 이탈 전까지 대기"
+    else:
+        guide = "회복선과 약세 확인선 사이이므로 기존 회피 관점을 유지하되 단정하지 않음"
+    return f"- {tracking_type}: {items} — {guide}"
 
 
 def build_previous_signal_review(snapshot: MarketSnapshot, previous_signals: dict[str, Any] | None) -> tuple[str, list[str]]:
@@ -1810,36 +1885,55 @@ def build_previous_signal_review(snapshot: MarketSnapshot, previous_signals: dic
         return "전일 후보 추적\n이전 후보 기록이 없어 오늘부터 추적을 시작합니다.", warnings
 
     previous_date = previous_signals.get("target_date", "이전 거래일")
-    lines = [f"전일 후보 추적\n기준: {previous_date} 후보를 {snapshot.target_date.isoformat()} 종가로 평가"]
     verdict_counts = {"성공": 0, "실패": 0, "보류": 0}
+    results: list[dict[str, Any]] = []
 
     interest = previous_signals.get("interest") or []
     avoid = previous_signals.get("avoid") or []
-    if interest:
-        lines.append("관심 후보 평가")
-        for signal in interest:
-            try:
-                result = _evaluate_signal(signal, snapshot)
-                verdict_counts[str(result["verdict"])] += 1
-                lines.append(_format_tracked_signal(result))
-            except Exception as exc:  # noqa: BLE001
-                warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
-    if avoid:
-        lines.append("비선호 후보 평가")
-        for signal in avoid:
-            try:
-                result = _evaluate_signal(signal, snapshot)
-                verdict_counts[str(result["verdict"])] += 1
-                lines.append(_format_tracked_signal(result))
-            except Exception as exc:  # noqa: BLE001
-                warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
+    for signal in interest:
+        try:
+            result = _evaluate_signal(signal, snapshot, is_interest=True)
+            verdict_counts[str(result["verdict"])] += 1
+            results.append(result)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
+    for signal in avoid:
+        try:
+            result = _evaluate_signal(signal, snapshot, is_interest=False)
+            verdict_counts[str(result["verdict"])] += 1
+            results.append(result)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"{signal.get('symbol', '후보')} 추적 실패: {exc}")
 
     total = sum(verdict_counts.values())
-    if total:
-        lines.insert(
-            1,
-            f"요약: 성공 {verdict_counts['성공']} / 실패 {verdict_counts['실패']} / 보류 {verdict_counts['보류']}",
+    if not total:
+        return (
+            f"전일 후보 추적\n기준: {previous_date} 후보를 {snapshot.target_date.isoformat()} 종가로 평가\n"
+            "평가할 전일 후보가 없습니다.",
+            warnings,
         )
-    else:
-        lines.append("평가할 전일 후보가 없습니다.")
+
+    average_change = sum(float(result["change"]) for result in results) / total
+    up_count = sum(1 for result in results if float(result["change"]) > 0.05)
+    down_count = sum(1 for result in results if float(result["change"]) < -0.05)
+    movers = sorted(results, key=lambda item: abs(float(item["change"])), reverse=True)[:6]
+
+    lines = [
+        "전일 후보 추적",
+        f"기준: {previous_date} 후보를 {snapshot.target_date.isoformat()} 종가로 평가",
+        f"요약: 성공 {verdict_counts['성공']} / 실패 {verdict_counts['실패']} / 보류 {verdict_counts['보류']}",
+        f"오늘의 이야기: {_tracking_story(results)}",
+        f"성과 분포: 상승 {up_count} / 하락 {down_count} / 평균 {format_change(average_change)}",
+        "종가 변동 차트",
+        "차트 읽기: █ 한 칸은 약 1% 움직임이며 최대 8칸으로 표시합니다. 길이보다 화살표 방향과 출발 관점이 맞았는지를 함께 봅니다.",
+    ]
+    lines.extend(_format_tracked_signal(result) for result in movers)
+    lines.extend(["판정이 바뀐 후보", *_tracking_table(results)])
+    lines.extend(
+        [
+            "보류 후보 묶음",
+            _tracking_hold_line(results, "관심"),
+            _tracking_hold_line(results, "비선호"),
+        ]
+    )
     return "\n".join(lines), warnings
