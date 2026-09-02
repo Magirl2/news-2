@@ -1946,7 +1946,7 @@ def build_briefing(config: Config) -> Briefing:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORTS_DIR / f"{target_date.isoformat()}_briefing.md"
     report_path.write_text(text, encoding="utf-8")
-    write_investment_signals(REPORTS_DIR, investment_package)
+    write_investment_signals(REPORTS_DIR, investment_package, previous_signals)
     html_path = _write_html_report(
         report_path,
         text,

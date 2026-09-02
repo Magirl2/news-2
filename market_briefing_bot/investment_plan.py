@@ -1622,9 +1622,22 @@ def build_investment_report(snapshot: MarketSnapshot, sectors: list[Quote], news
     return package.text, package.warnings
 
 
-def write_investment_signals(reports_dir: Path, package: InvestmentPackage) -> None:
+def write_investment_signals(
+    reports_dir: Path,
+    package: InvestmentPackage,
+    previous_signals: dict[str, Any] | None = None,
+) -> None:
     signals_dir = reports_dir / "signals"
     signals_dir.mkdir(parents=True, exist_ok=True)
+    if previous_signals:
+        previous_date = str(previous_signals.get("target_date") or "")
+        current_date = str(package.signals.get("target_date") or "")
+        if previous_date and previous_date < current_date:
+            package.signals["previous_signals"] = {
+                key: value
+                for key, value in previous_signals.items()
+                if key != "previous_signals"
+            }
     target_date = package.signals["target_date"]
     text = json.dumps(package.signals, ensure_ascii=False, indent=2)
     (signals_dir / f"{target_date}_signals.json").write_text(text, encoding="utf-8")
@@ -1638,6 +1651,11 @@ def load_previous_investment_signals(reports_dir: Path, current_date: date) -> d
             data = json.loads(workflow_seed.read_text(encoding="utf-8"))
             if data.get("target_date") != current_date.isoformat():
                 return data
+            embedded_previous = data.get("previous_signals")
+            if isinstance(embedded_previous, dict):
+                previous_date = str(embedded_previous.get("target_date") or "")
+                if previous_date and previous_date < current_date.isoformat():
+                    return embedded_previous
         except json.JSONDecodeError:
             return None
 

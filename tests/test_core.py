@@ -58,12 +58,15 @@ from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
 from market_briefing_bot.watchlist import WatchlistAction, build_watchlist_actions, build_watchlist_review
 from market_briefing_bot.investment_plan import (
+    InvestmentPackage,
     _format_top_action_table,
     _interest_plan,
     _risk_reward_analysis,
     build_investment_package,
     build_investment_report,
     build_previous_signal_review,
+    load_previous_investment_signals,
+    write_investment_signals,
 )
 from market_briefing_bot.__main__ import (
     _already_sent,
@@ -965,6 +968,53 @@ class InvestmentPlanTests(unittest.TestCase):
         self.assertEqual(package.signals["target_date"], "2026-07-02")
         self.assertTrue(package.signals["interest"])
         self.assertIn("score", package.signals["interest"][0])
+
+    def test_signal_file_embeds_previous_day_for_same_day_rebuilds(self) -> None:
+        package = InvestmentPackage(
+            text="",
+            warnings=[],
+            interest_plans=[],
+            avoid_plans=[],
+            signals={"target_date": "2026-07-03", "interest": [], "avoid": []},
+        )
+        previous = {
+            "target_date": "2026-07-02",
+            "interest": [{"symbol": "NVDA"}],
+            "avoid": [],
+            "previous_signals": {"target_date": "2026-07-01"},
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            reports_dir = Path(temp_dir)
+            write_investment_signals(reports_dir, package, previous)
+            latest = json.loads(
+                (reports_dir / "signals" / "latest.json").read_text(encoding="utf-8")
+            )
+            (reports_dir / "previous_signals.json").write_text(
+                json.dumps(latest, ensure_ascii=False), encoding="utf-8"
+            )
+            restored = load_previous_investment_signals(reports_dir, date(2026, 7, 3))
+
+        self.assertEqual(restored, {
+            "target_date": "2026-07-02",
+            "interest": [{"symbol": "NVDA"}],
+            "avoid": [],
+        })
+
+    def test_signal_file_does_not_embed_same_day_as_previous(self) -> None:
+        package = InvestmentPackage(
+            text="",
+            warnings=[],
+            interest_plans=[],
+            avoid_plans=[],
+            signals={"target_date": "2026-07-03", "interest": [], "avoid": []},
+        )
+        same_day = {"target_date": "2026-07-03", "interest": [], "avoid": []}
+
+        with TemporaryDirectory() as temp_dir:
+            write_investment_signals(Path(temp_dir), package, same_day)
+
+        self.assertNotIn("previous_signals", package.signals)
 
     def test_previous_signal_review_marks_entry_hit(self) -> None:
         snapshot = MarketSnapshot(
