@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from market_briefing_bot.briefing import (
+    _data_freshness_html,
     _importance_badge_class,
     _market_charts_html,
     _mini_chart_svg,
@@ -17,6 +18,7 @@ from market_briefing_bot.briefing import (
     _news_dashboard,
     _news_impact_badge_class,
     _news_impact_classification,
+    _news_cards_html,
     _news_price_reaction,
     _quick_takeaways_text,
     _report_badge_class,
@@ -27,6 +29,7 @@ from market_briefing_bot.briefing import (
     _sector_scoreboard_html,
     _sector_scorecards,
     _warnings_block,
+    _write_html_report,
 )
 from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
 from market_briefing_bot.market_calendar import (
@@ -208,6 +211,14 @@ class NewsSummaryTests(unittest.TestCase):
         self.assertIn("긍정", f"긍정: {bull_case}")
         self.assertIn("위험", bear_case)
         self.assertGreaterEqual(len(korean_news_next_signals(item)), 3)
+
+    def test_plain_explanation_uses_correct_korean_subject_particle(self) -> None:
+        explanation = korean_news_plain_explanation(
+            "Broadcom delivers strong earnings view as CEO touts growth with AI labs"
+        )
+
+        self.assertNotIn("전망가", explanation)
+        self.assertIn("전망이", explanation)
 
     def test_etf_flow_gets_flow_label(self) -> None:
         title = "Investors piled into ETFs at a record pace. Here is where their money is flowing."
@@ -1183,6 +1194,30 @@ class KakaoDeliveryTextTests(unittest.TestCase):
 
 
 class HtmlReportTests(unittest.TestCase):
+    def test_data_freshness_calls_out_delayed_sector_quotes(self) -> None:
+        target = date(2026, 7, 7)
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={
+                "S&P 500": Quote("S&P 500", "^GSPC", target, 100, 99, 1.0, "test")
+            },
+            sector_quotes={
+                "Technology": Quote(
+                    "Technology", "XLK", date(2026, 7, 6), 100, 99, 1.0, "test"
+                )
+            },
+            risk_quotes={
+                "VIX": Quote("VIX", "^VIX", target, 15, 16, -6.25, "test")
+            },
+            warnings=[],
+        )
+
+        rendered = _data_freshness_html(snapshot)
+
+        self.assertIn("일부 데이터 지연", rendered)
+        self.assertIn("섹터 2026-07-06", rendered)
+        self.assertIn("직전 확인값", rendered)
+
     def test_sector_scoreboard_prioritizes_six_and_collapses_details(self) -> None:
         target = date(2026, 7, 7)
         names = [
@@ -1274,6 +1309,27 @@ class HtmlReportTests(unittest.TestCase):
         self.assertEqual(_report_badge_class("진입 후보"), "report-badge action-ok")
         self.assertEqual(_report_badge_class("눌림 관찰"), "report-badge action-wait")
         self.assertEqual(_report_badge_class("과이격/추격주의"), "report-badge action-risk")
+
+    def test_html_report_adds_jump_navigation_and_collapses_full_detail(self) -> None:
+        target = date(2026, 7, 7)
+        snapshot = MarketSnapshot(
+            target_date=target,
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+        text = "미국장 마감 2026-07-07\nS&P 500 +1.00%\n한줄: 테스트\n\n위험판\n설명"
+
+        with TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "2026-07-07_briefing.md"
+            html_path = _write_html_report(report_path, text, snapshot, [], [])
+            rendered = html_path.read_text(encoding="utf-8")
+
+        self.assertIn('class="jump-nav"', rendered)
+        self.assertIn('href="#news-analysis"', rendered)
+        self.assertIn('class="full-report" id="full-report"', rendered)
+        self.assertIn("전체 상세 근거 펼치기", rendered)
 
     def test_position_mode_and_risk_reward_badges_render(self) -> None:
         rendered = _render_report_sections(
@@ -1594,12 +1650,47 @@ class NewsDecisionQualityTests(unittest.TestCase):
         card = _news_card(1, item, snapshot, max_chars=1200)
 
         self.assertIn("영향 분류:", card)
-        self.assertIn("무슨 내용:", card)
+        self.assertNotIn("무슨 내용:", card)
         self.assertIn("왜 중요:", card)
         self.assertIn("투자 해석:", card)
         self.assertIn("긍정 시나리오:", card)
         self.assertIn("부정 시나리오:", card)
         self.assertIn("확인 신호:", card)
+
+    def test_news_html_is_ranked_collapsible_and_avoids_duplicate_copy(self) -> None:
+        items = [
+            NewsItem(
+                title="Retail shoppers prepare for summer travel season",
+                description="",
+                link="https://example.com/retail",
+                source="Example",
+                published="",
+                score=1,
+            ),
+            NewsItem(
+                title="Fed rate path remains uncertain as inflation data looms",
+                description="Treasury yields move higher.",
+                link="https://example.com/fed",
+                source="Example",
+                published="",
+                score=5,
+            ),
+        ]
+        snapshot = MarketSnapshot(
+            target_date=date(2026, 7, 7),
+            index_quotes={},
+            sector_quotes={},
+            risk_quotes={},
+            warnings=[],
+        )
+
+        rendered = _news_cards_html(snapshot, items, [])
+
+        self.assertEqual(rendered.count("<details"), 2)
+        self.assertEqual(rendered.count("<details open>"), 1)
+        self.assertLess(rendered.index("Fed rate path"), rendered.index("Retail shoppers"))
+        self.assertNotIn("무슨 내용:", rendered)
+        self.assertIn("<summary>", rendered)
 
     def test_news_impact_classifies_direct_indirect_and_reference(self) -> None:
         action = WatchlistAction(

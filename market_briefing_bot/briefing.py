@@ -27,7 +27,6 @@ from .news import (
     korean_news_next_signals,
     korean_news_importance,
     korean_news_label,
-    korean_news_plain_explanation,
     korean_news_related,
     korean_news_scenario,
     korean_news_sentiment,
@@ -77,6 +76,87 @@ def _join_quotes(snapshot: MarketSnapshot) -> str:
     for name, quote in snapshot.index_quotes.items():
         parts.append(f"{name} {format_change(quote.change_percent)}")
     return ", ".join(parts)
+
+
+def _quote_group_date_label(quotes: list[Quote]) -> str:
+    dates = sorted({quote.trading_date for quote in quotes})
+    if not dates:
+        return "확인 불가"
+    if len(dates) == 1:
+        return dates[0].isoformat()
+    return f"{dates[0].isoformat()}~{dates[-1].isoformat()}"
+
+
+def _data_freshness(snapshot: MarketSnapshot) -> tuple[str, str, str]:
+    groups = (
+        ("지수", list(snapshot.index_quotes.values())),
+        ("섹터", list(snapshot.sector_quotes.values())),
+        ("위험지표", list(snapshot.risk_quotes.values())),
+    )
+    basis = " · ".join(
+        f"{label} {_quote_group_date_label(quotes)}" for label, quotes in groups
+    )
+    delayed = [
+        label
+        for label, quotes in groups
+        if any(quote.trading_date < snapshot.target_date for quote in quotes)
+    ]
+    missing = [label for label, quotes in groups if not quotes]
+    if delayed:
+        delayed_text = "·".join(delayed)
+        return (
+            "일부 데이터 지연",
+            basis,
+            f"{delayed_text}는 {snapshot.target_date.isoformat()} 마감이 아직 반영되지 않았습니다. "
+            "해당 순위와 등락은 직전 확인값으로 읽으세요.",
+        )
+    if missing:
+        missing_text = "·".join(missing)
+        return (
+            "일부 데이터 없음",
+            basis,
+            f"{missing_text} 데이터를 가져오지 못했습니다. 없는 영역은 판단 근거에서 제외하세요.",
+        )
+    return (
+        "마감 데이터 확인",
+        basis,
+        f"표시된 데이터가 {snapshot.target_date.isoformat()} 마감 기준과 일치합니다.",
+    )
+
+
+def _data_freshness_text(snapshot: MarketSnapshot) -> str:
+    status, basis, guidance = _data_freshness(snapshot)
+    return (
+        "데이터 기준\n"
+        f"상태: {status}\n"
+        f"기준일: {basis}\n"
+        f"읽는 법: {guidance}"
+    )
+
+
+def _data_freshness_html(snapshot: MarketSnapshot) -> str:
+    status, basis, guidance = _data_freshness(snapshot)
+    tone = "is-delayed" if status != "마감 데이터 확인" else "is-current"
+    return f"""
+    <section class="data-freshness {tone}" aria-label="데이터 기준일">
+      <div class="freshness-title">
+        <strong>데이터 기준</strong>
+        <span>{html.escape(status)}</span>
+      </div>
+      <p>{html.escape(basis)}</p>
+      <small>{html.escape(guidance)}</small>
+    </section>
+    """
+
+
+def _sector_basis_label(snapshot: MarketSnapshot) -> str:
+    quotes = list(snapshot.sector_quotes.values())
+    if not quotes:
+        return "확인 불가"
+    basis = _quote_group_date_label(quotes)
+    if any(quote.trading_date < snapshot.target_date for quote in quotes):
+        return f"{basis} 종가 기준 · 최신 마감 미반영"
+    return f"{basis} 종가 기준"
 
 
 def _sector_line(quotes: list, count: int = 3) -> str:
@@ -276,7 +356,7 @@ def _sector_breadth(snapshot: MarketSnapshot) -> str:
 
 def _risk_regime(snapshot: MarketSnapshot) -> tuple[str, str]:
     index_changes = [quote.change_percent for quote in snapshot.index_quotes.values()]
-    avg_index = sum(index_changes) / len(index_changes)
+    avg_index = sum(index_changes) / len(index_changes) if index_changes else 0.0
     vix = snapshot.risk_quotes.get("VIX")
     ten_year = snapshot.risk_quotes.get("10Y Yield")
     dollar = snapshot.risk_quotes.get("Dollar")
@@ -413,11 +493,13 @@ def _today_decision(snapshot: MarketSnapshot, sectors: list, news_items: list[Ne
     strong = _sector_line(sectors[:3], count=3) if sectors else "확인 불가"
     weak = _sector_line(list(reversed(sectors[-2:])), count=2) if sectors else "확인 불가"
     theme = _theme_from_snapshot(snapshot, news_items)
+    sector_basis = _sector_basis_label(snapshot)
     return (
         "오늘의 결론\n"
         f"시장 모드: {regime}\n"
         f"우선 볼 섹터: {strong}\n"
         f"조심할 섹터: {weak}\n"
+        f"섹터 기준: {sector_basis}\n"
         f"핵심 테마: {theme}\n"
         f"행동 원칙: {action}"
     )
@@ -428,9 +510,10 @@ def _quick_takeaways(snapshot: MarketSnapshot, sectors: list, news_items: list[N
     strong = _sector_line(sectors[:3], count=3) if sectors else "확인 불가"
     weak = _sector_line(list(reversed(sectors[-2:])), count=2) if sectors else "확인 불가"
     theme = _theme_from_snapshot(snapshot, news_items)
+    sector_basis = _sector_basis_label(snapshot)
     return [
         ("시장 판단", f"{regime}: {action}"),
-        ("우선 볼 섹터", f"{strong} / 핵심 테마: {theme}"),
+        ("우선 볼 섹터", f"{strong} / 핵심 테마: {theme} / {sector_basis}"),
         ("조심할 것", f"{weak} 약세 확산 여부와 VIX/금리 방향 확인"),
     ]
 
@@ -756,6 +839,19 @@ def _sector_focus_reason(card: SectorScore) -> str:
     return sentence
 
 
+def _unique_news_signals(item: NewsItem, checkpoints: list[str]) -> list[str]:
+    checkpoint_set = {checkpoint.strip() for checkpoint in checkpoints}
+    unique: list[str] = []
+    seen: set[str] = set()
+    for signal in korean_news_next_signals(item):
+        cleaned = signal.strip()
+        if not cleaned or cleaned in checkpoint_set or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
 def _sector_scorecards(
     snapshot: MarketSnapshot,
     sectors: list[Quote] | None = None,
@@ -909,9 +1005,16 @@ def _news_card(
     impact, impact_reason = _news_impact_classification(item, watchlist_actions or [])
     price_reaction = _news_price_reaction(item, snapshot)
     bull_case, bear_case = korean_news_scenario(item)
-    signals = korean_news_next_signals(item)
     interpretation = interpretation or rule_based_news_interpretation(item)
+    signals = _unique_news_signals(item, interpretation.checkpoints)
     checkpoint_text = " / ".join(interpretation.checkpoints)
+    signal_text = " / ".join(signals) or "위 확인 포인트와 동일"
+    why_it_matters = korean_news_why_it_matters(item)
+    risk_line = (
+        f"리스크: {interpretation.risks}\n"
+        if interpretation.risks.strip() != why_it_matters.strip()
+        else ""
+    )
     card = (
         f"뉴스 {index}/5 [{label}] {sentiment}\n"
         f"중요도: {importance} - {importance_reason}\n"
@@ -919,15 +1022,14 @@ def _news_card(
         f"원문: {item.title}\n"
         f"핵심: {headline}\n"
         f"핵심 요약({interpretation.source}): {interpretation.core_summary}\n"
-        f"무슨 내용: {korean_news_plain_explanation(item)}\n"
-        f"왜 중요: {korean_news_why_it_matters(item)}\n"
+        f"왜 중요: {why_it_matters}\n"
         f"투자 해석: {interpretation.investment_read}\n"
-        f"리스크: {interpretation.risks}\n"
+        f"{risk_line}"
         f"가격반응: {price_reaction}\n"
         f"긍정 시나리오: {bull_case}\n"
         f"부정 시나리오: {bear_case}\n"
         f"확인 포인트: {checkpoint_text}\n"
-        f"확인 신호: {' / '.join(signals)}\n"
+        f"확인 신호: {signal_text}\n"
         f"관련: {korean_news_related(item)}\n"
         f"출처: {item.source} {item.link}"
     )
@@ -1003,7 +1105,7 @@ def _news_dashboard_html(snapshot: MarketSnapshot, news_items: list[NewsItem]) -
         read_class = "read-mixed"
 
     return f"""
-    <section class="news-dashboard">
+    <section class="news-dashboard" id="news-dashboard">
       <div class="dashboard-head">
         <span class="read-badge {read_class}">{html.escape(read)}</span>
         <div>
@@ -1062,7 +1164,7 @@ def _mobile_quick_summary_html(
 
     read, action_text = _news_market_read(news_items)
     return f"""
-    <section class="quick-summary">
+    <section class="quick-summary" id="quick-summary">
       <div class="quick-head">
         <p class="eyebrow">Mobile Quick View</p>
         <h2>빠른 요약</h2>
@@ -1236,7 +1338,7 @@ def _market_charts_html(snapshot: MarketSnapshot, sectors: list[Quote]) -> str:
             '</section>'
         )
     return f"""
-    <section class="charts-section">
+    <section class="charts-section" id="charts">
       <div class="charts-head">
         <h2>가격 차트</h2>
         <p>S&P500, Nasdaq, VIX, 10년물 금리와 주요 섹터 ETF의 최근 20거래일 흐름입니다.</p>
@@ -1391,7 +1493,12 @@ def _render_report_sections(text: str) -> str:
             or "오늘 3줄 결론" in title
         ):
             class_name += " report-decision"
-        elif "이벤트" in title or "SEC 공시" in title or "실적 발표" in title:
+        elif (
+            "이벤트" in title
+            or "SEC 공시" in title
+            or "실적 발표" in title
+            or "데이터 기준" in title
+        ):
             class_name += " report-event"
         elif "핵심 리스크" in title or "섹터 로테이션" in title or "섹터 점수판" in title or "오늘의 경고" in title:
             class_name += " report-event"
@@ -1482,11 +1589,13 @@ def _sector_scoreboard_html(
     middle_text = ", ".join(
         f"{card.label} {_format_score(card.total_score)}" for card in middle_cards
     ) or "없음"
+    sector_basis = _sector_basis_label(snapshot)
     return f"""
     <section class="scoreboard-shell">
       <div class="scoreboard-intro">
         <strong>상·하위만 먼저 읽으세요.</strong>
         <span>가격·뉴스·금리·수급을 합친 상대 순위입니다. 전체 11개를 펼치지 않고 결정에 필요한 6개만 보여줍니다.</span>
+        <small>{html.escape(sector_basis)}</small>
       </div>
       <div class="scoreboard-lanes">
         {lane('먼저 볼 3', '점수가 높은 순서입니다. 가격 지속성과 거래량을 다음날 확인합니다.', top_cards, 'positive')}
@@ -1495,6 +1604,88 @@ def _sector_scoreboard_html(
       <p class="scoreboard-middle"><b>나머지:</b> {html.escape(middle_text)} — 상·하위 3개에서 제외했으며, 총점 동점은 당일 등락으로 정렬합니다.</p>
     </section>
     """
+
+
+def _jump_nav_html() -> str:
+    return """
+    <nav class="jump-nav" aria-label="보고서 바로가기">
+      <strong>바로가기</strong>
+      <a href="#quick-summary">빠른 요약</a>
+      <a href="#charts">가격 차트</a>
+      <a href="#sector-view">섹터</a>
+      <a href="#news-dashboard">뉴스 요약</a>
+      <a href="#news-analysis">뉴스 상세</a>
+      <a href="#full-report">전체 근거</a>
+    </nav>
+    """
+
+
+def _news_cards_html(
+    snapshot: MarketSnapshot,
+    news_items: list[NewsItem],
+    watchlist_actions: list[WatchlistAction],
+    interpretations: dict[str, NewsInterpretation] | None = None,
+) -> str:
+    cards: list[str] = []
+    ranked_items = _ranked_news_items(news_items)[:5]
+    for index, item in enumerate(ranked_items, start=1):
+        importance, importance_reason = korean_news_importance(item)
+        importance_class = _importance_badge_class(importance)
+        impact, impact_reason = _news_impact_classification(item, watchlist_actions)
+        impact_class = _news_impact_badge_class(impact)
+        sentiment, _sentiment_reason = korean_news_sentiment(item)
+        bull_case, bear_case = korean_news_scenario(item)
+        interpretation = (interpretations or {}).get(item.link) or rule_based_news_interpretation(item)
+        signals = _unique_news_signals(item, interpretation.checkpoints)
+        signal_items = "".join(f"<li>{html.escape(signal)}</li>" for signal in signals)
+        checkpoint_items = "".join(
+            f"<li>{html.escape(checkpoint)}</li>" for checkpoint in interpretation.checkpoints
+        )
+        why_it_matters = korean_news_why_it_matters(item)
+        risk_html = ""
+        if interpretation.risks.strip() != why_it_matters.strip():
+            risk_html = f"<span><b>리스크:</b> {html.escape(interpretation.risks)}</span>"
+        signals_html = ""
+        if signal_items:
+            signals_html = (
+                '<div class="signal-block"><b>다음날 확인 신호</b>'
+                f"<ul>{signal_items}</ul></div>"
+            )
+        open_attribute = " open" if index == 1 else ""
+        cards.append(
+            f"""
+            <li>
+              <details{open_attribute}>
+                <summary>
+                  <span class="news-summary-title">{html.escape(korean_news_headline(item))}</span>
+                  <span class="news-summary-meta">
+                    <b class="news-topic">{html.escape(korean_news_label(item))}</b>
+                    <b class="importance-badge {importance_class}">{html.escape(importance)}</b>
+                    <b class="impact-badge {impact_class}">{html.escape(impact)}</b>
+                    <em class="sentiment">{html.escape(sentiment)}</em>
+                  </span>
+                  <span class="news-summary-brief">{html.escape(interpretation.core_summary)}</span>
+                </summary>
+                <div class="news-detail">
+                  <span class="original-title">원문: {html.escape(item.title)}</span>
+                  <span class="importance-line"><b>중요도:</b> {html.escape(importance_reason)}</span>
+                  <span class="impact-line"><b>영향:</b> {html.escape(impact_reason)}</span>
+                  <span><b>왜 중요:</b> {html.escape(why_it_matters)}</span>
+                  <span><b>투자 해석:</b> {html.escape(interpretation.investment_read)}</span>
+                  {risk_html}
+                  <span><b>가격반응:</b> {html.escape(_news_price_reaction(item, snapshot))}</span>
+                  <span><b>긍정 시나리오:</b> {html.escape(bull_case)}</span>
+                  <span><b>부정 시나리오:</b> {html.escape(bear_case)}</span>
+                  <span><b>관련:</b> {html.escape(korean_news_related(item))}</span>
+                  <div class="signal-block"><b>확인 포인트</b><ul>{checkpoint_items}</ul></div>
+                  {signals_html}
+                  <a href="{html.escape(item.link)}" target="_blank" rel="noopener noreferrer">{html.escape(item.source)} 원문 열기</a>
+                </div>
+              </details>
+            </li>
+            """
+        )
+    return "".join(cards)
 
 
 def _write_html_report(
@@ -1539,40 +1730,12 @@ def _write_html_report(
 
     sector_scoreboard = _sector_scoreboard_html(snapshot, sectors, news_items)
 
-    news_cards = []
-    for item in news_items[:5]:
-        importance, importance_reason = korean_news_importance(item)
-        importance_class = _importance_badge_class(importance)
-        impact, impact_reason = _news_impact_classification(item, watchlist_actions)
-        impact_class = _news_impact_badge_class(impact)
-        sentiment, sentiment_reason = korean_news_sentiment(item)
-        bull_case, bear_case = korean_news_scenario(item)
-        signals = korean_news_next_signals(item)
-        interpretation = (interpretations or {}).get(item.link) or rule_based_news_interpretation(item)
-        signal_items = "".join(f"<li>{html.escape(signal)}</li>" for signal in signals)
-        checkpoint_items = "".join(f"<li>{html.escape(checkpoint)}</li>" for checkpoint in interpretation.checkpoints)
-        news_cards.append(
-            f"""
-            <li>
-              <strong>{html.escape(korean_news_label(item))}: {html.escape(korean_news_headline(item))}</strong>
-              <span class="original-title">원문: {html.escape(item.title)}</span>
-              <span class="importance-line">중요도 <b class="importance-badge {importance_class}">{html.escape(importance)}</b> {html.escape(importance_reason)}</span>
-              <span class="impact-line">영향 분류 <b class="impact-badge {impact_class}">{html.escape(impact)}</b> {html.escape(impact_reason)}</span>
-              <span><b>핵심 요약({html.escape(interpretation.source)}):</b> {html.escape(interpretation.core_summary)}</span>
-              <span><b>무슨 내용:</b> {html.escape(korean_news_plain_explanation(item))}</span>
-              <span><b>왜 중요:</b> {html.escape(korean_news_why_it_matters(item))}</span>
-              <span><b>투자 해석:</b> <em class="sentiment">{html.escape(sentiment)}</em> - {html.escape(interpretation.investment_read)}</span>
-              <span><b>리스크:</b> {html.escape(interpretation.risks)}</span>
-              <span><b>가격반응:</b> {html.escape(_news_price_reaction(item, snapshot))}</span>
-              <span><b>긍정 시나리오:</b> {html.escape(bull_case)}</span>
-              <span><b>부정 시나리오:</b> {html.escape(bear_case)}</span>
-              <span><b>관련:</b> {html.escape(korean_news_related(item))}</span>
-              <div class="signal-block"><b>확인 포인트</b><ul>{checkpoint_items}</ul></div>
-              <div class="signal-block"><b>다음날 확인 신호</b><ul>{signal_items}</ul></div>
-              <a href="{html.escape(item.link)}">{html.escape(item.source)}</a>
-            </li>
-            """
-        )
+    news_cards = _news_cards_html(
+        snapshot,
+        news_items,
+        watchlist_actions,
+        interpretations,
+    )
 
     first_block = next((part.strip() for part in text.split("\n\n") if part.strip()), "")
     first_lines = [line.strip() for line in first_block.splitlines() if line.strip()]
@@ -1583,6 +1746,8 @@ def _write_html_report(
     news_dashboard = _news_dashboard_html(snapshot, news_items)
     quick_summary = _mobile_quick_summary_html(snapshot, sectors, news_items, watchlist_actions)
     chart_section = _market_charts_html(snapshot, sectors)
+    freshness = _data_freshness_html(snapshot)
+    jump_nav = _jump_nav_html()
     report_css = _report_css_text()
     html_text = f"""<!doctype html>
 <html lang="ko">
@@ -1834,17 +1999,32 @@ def _write_html_report(
       <div class="market-line">{html.escape(market_line)}</div>
       <p class="one-line">{html.escape(one_line)}</p>
     </header>
+    {jump_nav}
+    {freshness}
     {quick_summary}
     {chart_section}
-    <h2>섹터맵</h2>
-    <div class="grid">{''.join(sector_cards)}</div>
-    <h2>섹터 점수판</h2>
-    {sector_scoreboard}
+    <section class="sector-overview" id="sector-view">
+      <div class="section-title-row">
+        <h2>섹터맵</h2>
+        <span>{html.escape(_sector_basis_label(snapshot))}</span>
+      </div>
+      <div class="grid">{''.join(sector_cards)}</div>
+      <h2>섹터 점수판</h2>
+      {sector_scoreboard}
+    </section>
     {news_dashboard}
-    <h2>주요 뉴스 분석</h2>
-    <ol class="news-list">{''.join(news_cards)}</ol>
-    <h2 class="detail-label">상세 보고서</h2>
-    <div class="report-flow">{rendered_sections}</div>
+    <section class="news-analysis" id="news-analysis">
+      <h2>주요 뉴스 분석</h2>
+      <p class="section-guide">중요도 순으로 정렬했습니다. 첫 뉴스만 펼쳐 두고 나머지는 제목과 한줄 요약을 보고 선택해서 여세요.</p>
+      <ol class="news-list">{news_cards}</ol>
+    </section>
+    <details class="full-report" id="full-report">
+      <summary>
+        <strong>전체 상세 근거 펼치기</strong>
+        <span>위험판, 이벤트 일정, 전일 후보 추적, 투자 액션 표를 포함합니다.</span>
+      </summary>
+      <div class="report-flow">{rendered_sections}</div>
+    </details>
     <footer>Source: Yahoo Finance, RSS feeds. This report is rule-based market reference material.</footer>
   </main>
 </body>
@@ -1913,6 +2093,7 @@ def build_briefing(config: Config) -> Briefing:
             f"{_join_quotes(snapshot)}\n"
             f"한줄: {_one_line(snapshot)}"
         ),
+        _data_freshness_text(snapshot),
         _quick_takeaways_text(snapshot, sectors, news_items),
         _today_decision(snapshot, sectors, news_items),
         _watchlist_actions_text(watchlist_actions),

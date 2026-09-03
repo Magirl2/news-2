@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from .news import (
     NewsItem,
     korean_news_checkpoints,
-    korean_news_plain_explanation,
     korean_news_sentiment,
+    korean_news_summary,
     korean_news_thinking_frame,
     korean_news_why_it_matters,
 )
@@ -31,7 +31,7 @@ def rule_based_news_interpretation(item: NewsItem) -> NewsInterpretation:
     sentiment, sentiment_reason = korean_news_sentiment(item)
     checkpoints = korean_news_checkpoints(item)
     return NewsInterpretation(
-        core_summary=korean_news_plain_explanation(item),
+        core_summary=korean_news_summary(item),
         investment_read=f"{sentiment}: {sentiment_reason} {korean_news_thinking_frame(item)}",
         risks=korean_news_why_it_matters(item),
         checkpoints=checkpoints[:4] or ["다음 거래일 가격과 거래량 반응 확인"],

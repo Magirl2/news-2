@@ -540,6 +540,16 @@ def korean_news_summary(title: str | NewsItem, description: str = "") -> str:
     return f"{subject} 관련 뉴스입니다. 단기 매매보다 시장심리와 관련 업종 반응을 확인하는 용도로 보세요."
 
 
+def _korean_subject_particle(text: str) -> str:
+    for char in reversed(text.strip()):
+        if "가" <= char <= "힣":
+            has_final_consonant = (ord(char) - ord("가")) % 28 != 0
+            return "이" if has_final_consonant else "가"
+        if char.isalnum():
+            break
+    return "이"
+
+
 def korean_news_plain_explanation(title: str | NewsItem, description: str = "") -> str:
     title_text, description_text, _source = _combined_text(title, description)
     text = f"{title_text} {description_text}"
@@ -548,9 +558,10 @@ def korean_news_plain_explanation(title: str | NewsItem, description: str = "") 
     event = _event_text(text)
     headline = korean_news_headline(title_text, description_text)
     specific = _specific_headline(text)
+    particle = _korean_subject_particle(event)
     if specific:
-        return f"{specific}입니다. 쉽게 말해 {subject} 쪽에서 {event}이 가격에 어떻게 반영되는지 확인해야 하는 뉴스입니다."
-    return f"{headline}입니다. 쉽게 말해 {subject} 쪽에서 {event}가 투자심리에 영향을 주는 뉴스입니다."
+        return f"{specific}입니다. 쉽게 말해 {subject} 쪽에서 {event}{particle} 가격에 어떻게 반영되는지 확인해야 하는 뉴스입니다."
+    return f"{headline}입니다. 쉽게 말해 {subject} 쪽에서 {event}{particle} 투자심리에 영향을 주는 뉴스입니다."
 
 
 def korean_news_why_it_matters(title: str | NewsItem, description: str = "") -> str:
