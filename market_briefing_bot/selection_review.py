@@ -25,11 +25,26 @@ class SignalEvaluation:
     first_target_price: float | None
     returns: dict[int, float | None]
     spy_relative_5d: float | None
+    latest_price: float | None
+    holding_days: int
+    current_return: float | None
+    spy_relative_current: float | None
     max_favorable_percent: float | None
     max_adverse_percent: float | None
     outcome: str
     r_result: float | None
     note: str
+
+
+@dataclass(frozen=True)
+class RecommendationPerformance:
+    """Consumer-facing performance view for recommendations saved by prior reports."""
+
+    current_candidates: list[dict[str, Any]]
+    evaluations: list[SignalEvaluation]
+    history_days: int
+    excluded_current_count: int
+    warnings: list[str]
 
 
 def _parse_date(value: Any) -> date | None:
@@ -200,13 +215,35 @@ def evaluate_signal(
     reference_price = _reference_price(signal)
     invalidation_price = _float_value(signal.get("invalidation_price") or signal.get("stop_price"))
     first_target_price = _float_value(signal.get("first_target_price") or signal.get("entry_price"))
-    future = _future_rows(price_rows, signal_date, horizon)
-    spy_future = _future_rows(spy_rows or [], signal_date, horizon)
-    returns = {day: _return_after(future, reference_price, day) for day in (1, 3, 5, 10)}
-    spy_return_5d = _return_after(spy_future, _reference_from_rows(spy_rows or [], signal_date), 5)
+    all_future = _future_rows(price_rows, signal_date, len(price_rows))
+    future = all_future[:horizon]
+    spy_future = _future_rows(spy_rows or [], signal_date, len(spy_rows or []))
+    returns = {day: _return_after(all_future, reference_price, day) for day in (1, 3, 5, 10, 20)}
+    spy_return_5d = _return_after(
+        spy_future,
+        _reference_from_rows(spy_rows or [], signal_date),
+        5,
+    )
     relative_5d = None
     if returns[5] is not None and spy_return_5d is not None:
         relative_5d = returns[5] - spy_return_5d
+
+    latest_price = _float_value(all_future[-1].get("close")) if all_future else reference_price
+    current_return = None
+    if reference_price is not None and reference_price > 0 and latest_price is not None:
+        current_return = (latest_price / reference_price - 1) * 100
+    spy_reference = _reference_from_rows(spy_rows or [], signal_date)
+    latest_date = all_future[-1].get("date") if all_future else signal_date
+    spy_latest = _reference_from_rows(
+        [row for row in (spy_rows or []) if row.get("date") and row["date"] <= latest_date],
+        latest_date,
+    )
+    spy_current_return = None
+    if spy_reference is not None and spy_reference > 0 and spy_latest is not None:
+        spy_current_return = (spy_latest / spy_reference - 1) * 100
+    relative_current = None
+    if current_return is not None and spy_current_return is not None:
+        relative_current = current_return - spy_current_return
 
     max_favorable, max_adverse = _extremes(future, reference_price)
     outcome, r_result, note = _path_result(future, reference_price, invalidation_price, first_target_price)
@@ -221,11 +258,144 @@ def evaluate_signal(
         first_target_price=first_target_price,
         returns=returns,
         spy_relative_5d=relative_5d,
+        latest_price=latest_price,
+        holding_days=len(all_future),
+        current_return=current_return,
+        spy_relative_current=relative_current,
         max_favorable_percent=max_favorable,
         max_adverse_percent=max_adverse,
         outcome=outcome,
         r_result=r_result,
         note=note,
+    )
+
+
+def _is_recommendation_candidate(signal: dict[str, Any]) -> bool:
+    """Track actionable and conditional ideas, never explicit chase/avoid ideas."""
+
+    grade = str(signal.get("candidate_grade") or "").strip()
+    if grade:
+        return grade in {"A급", "B급"}
+    state = str(signal.get("recommendation_state") or "").strip()
+    if state in {"TREND_WEAK", "EXCLUDED"}:
+        return False
+    action = str(signal.get("entry_action") or "").strip()
+    if action in {"추격 금지", "제외"}:
+        return False
+    return bool(signal.get("symbol"))
+
+
+def _history_payloads(
+    previous_signals: dict[str, Any] | None,
+    current_date: date,
+) -> list[dict[str, Any]]:
+    if not previous_signals:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    embedded_history = previous_signals.get("recommendation_history")
+    if not isinstance(embedded_history, list):
+        embedded_history = previous_signals.get("history")
+    if isinstance(embedded_history, list):
+        candidates.extend(item for item in embedded_history if isinstance(item, dict))
+    candidates.append(previous_signals)
+
+    by_date: dict[str, dict[str, Any]] = {}
+    for payload in candidates:
+        payload_date = str(payload.get("target_date") or "")
+        if payload_date and payload_date < current_date.isoformat():
+            by_date[payload_date] = payload
+    return [by_date[key] for key in sorted(by_date)]
+
+
+def collect_recommendation_performance(
+    current_date: date,
+    current_signals: dict[str, Any],
+    previous_signals: dict[str, Any] | None,
+    *,
+    horizon: int = 20,
+    limit: int = 60,
+    price_fetcher: PriceFetcher = fetch_yahoo_daily,
+) -> RecommendationPerformance:
+    """Build a bounded recommendation ledger from the history carried by latest.json."""
+
+    current_interest = [
+        signal
+        for signal in (current_signals.get("interest") or [])
+        if isinstance(signal, dict)
+    ]
+    current_candidates = [signal for signal in current_interest if _is_recommendation_candidate(signal)]
+    current_candidates.sort(
+        key=lambda signal: (
+            0 if signal.get("candidate_grade") == "A급" else 1,
+            -int(signal.get("score") or 0),
+            str(signal.get("symbol") or ""),
+        )
+    )
+    excluded_current_count = len(current_interest) - len(current_candidates)
+    payloads = _history_payloads(previous_signals, current_date)
+
+    historical_signals: list[dict[str, Any]] = []
+    for payload in reversed(payloads):
+        day_signals = [
+            signal
+            for signal in (payload.get("interest") or [])
+            if isinstance(signal, dict) and _is_recommendation_candidate(signal)
+        ]
+        day_signals.sort(
+            key=lambda signal: (
+                0 if signal.get("candidate_grade") == "A급" else 1,
+                -int(signal.get("score") or 0),
+            )
+        )
+        historical_signals.extend(day_signals)
+
+    warnings: list[str] = []
+    price_cache: dict[str, list[dict[str, Any]]] = {}
+
+    def rows_for(symbol: str) -> list[dict[str, Any]]:
+        if symbol not in price_cache:
+            try:
+                price_cache[symbol] = [
+                    row
+                    for row in price_fetcher(symbol)
+                    if row.get("date") and row["date"] <= current_date
+                ]
+            except Exception as exc:  # noqa: BLE001 - keep the rest of the ledger usable.
+                warnings.append(f"{symbol}: 추천 성과용 가격 데이터를 가져오지 못했습니다. {exc}")
+                price_cache[symbol] = []
+        return price_cache[symbol]
+
+    spy_rows = rows_for("SPY")
+    evaluations: list[SignalEvaluation] = []
+    seen: set[tuple[date, str]] = set()
+    for signal in historical_signals:
+        signal_date = _parse_date(signal.get("date") or signal.get("target_date"))
+        symbol = str(signal.get("symbol") or "").strip().upper()
+        if signal_date is None or not symbol or (signal_date, symbol) in seen:
+            continue
+        seen.add((signal_date, symbol))
+        rows = rows_for(symbol)
+        if not rows:
+            continue
+        evaluation = evaluate_signal(
+            signal,
+            "interest",
+            rows,
+            spy_rows=spy_rows,
+            horizon=horizon,
+        )
+        if evaluation is not None:
+            evaluations.append(evaluation)
+        if len(evaluations) >= limit:
+            break
+
+    return RecommendationPerformance(
+        current_candidates=current_candidates,
+        evaluations=evaluations,
+        history_days=len(payloads),
+        excluded_current_count=excluded_current_count,
+        warnings=warnings,
     )
 
 
@@ -338,6 +508,121 @@ def _outcome_label(value: str) -> str:
         "NO_RISK_LEVELS": "가격 기준 부족",
     }
     return labels.get(value, value)
+
+
+def recommendation_performance_metrics(
+    performance: RecommendationPerformance,
+) -> dict[str, int | float | None]:
+    measured = [
+        item
+        for item in performance.evaluations
+        if item.holding_days > 0 and item.current_return is not None
+    ]
+    mature_5d = [item for item in performance.evaluations if item.returns.get(5) is not None]
+    return {
+        "tracked_count": len(performance.evaluations),
+        "symbol_count": len({item.symbol for item in performance.evaluations}),
+        "measured_count": len(measured),
+        "mature_5d_count": len(mature_5d),
+        "average_return": _avg(item.current_return for item in measured),
+        "positive_ratio": _positive_ratio(item.current_return for item in measured),
+        "average_relative": _avg(item.spy_relative_current for item in measured),
+        "average_5d": _avg(item.returns.get(5) for item in mature_5d),
+        "target_first": sum(1 for item in performance.evaluations if item.outcome == "TARGET_FIRST"),
+        "stop_first": sum(1 for item in performance.evaluations if item.outcome == "STOP_FIRST"),
+    }
+
+
+def recommendation_performance_read(performance: RecommendationPerformance) -> str:
+    metrics = recommendation_performance_metrics(performance)
+    measured_count = int(metrics["measured_count"] or 0)
+    if measured_count == 0:
+        return "성과 기록을 막 시작했습니다. 다음 거래일부터 수익률과 SPY 대비 성과가 채워집니다."
+
+    average_return = metrics["average_return"]
+    average_relative = metrics["average_relative"]
+    average_value = float(average_return or 0)
+    direction = "플러스" if average_value > 0 else "마이너스" if average_value < 0 else "보합"
+    if average_relative is not None:
+        benchmark_value = float(average_relative)
+        benchmark_read = "SPY를 웃돌았습니다" if benchmark_value > 0 else "SPY보다 약했습니다" if benchmark_value < 0 else "SPY와 같았습니다"
+        return (
+            f"평가 가능한 {measured_count}건의 단순 평균은 {direction}이고, "
+            f"같은 기간 기준으로는 {benchmark_read}. 표본 수와 보유기간을 함께 보세요."
+        )
+    return f"평가 가능한 {measured_count}건의 단순 평균은 {direction}입니다. 표본 수와 보유기간을 함께 보세요."
+
+
+def render_recommendation_performance(performance: RecommendationPerformance) -> str:
+    metrics = recommendation_performance_metrics(performance)
+    sample_label = "초기 표본" if int(metrics["tracked_count"] or 0) < 30 else "누적 표본"
+    positive_text = "-" if metrics["positive_ratio"] is None else f"{metrics['positive_ratio']:.1f}%"
+    lines = [
+        "추천 후보 성과판",
+        "범위: 보고서의 A급 진입 후보와 B급 조건부 관찰 후보 중 최근 최대 60건만 집계합니다. C급 추격 금지·제외 후보는 성과에서 뺍니다.",
+        (
+            f"누적: {performance.history_days}거래일 / {metrics['tracked_count']}건 / "
+            f"{metrics['symbol_count']}종목 / {sample_label}"
+        ),
+        f"해석: {recommendation_performance_read(performance)}",
+        (
+            f"요약: 평균 수익률 {_percent(metrics['average_return'])} / "
+            f"플러스 비율 {positive_text} / "
+            f"SPY 대비 {_percent(metrics['average_relative'])} / "
+            f"5거래일 성숙 표본 {metrics['mature_5d_count']}건"
+        ),
+        "계산: 시작 진입가가 있으면 그 가격, 없으면 추천일 종가를 기준가로 사용합니다. 수익률은 배당·수수료·실제 체결을 반영하지 않은 단순 비교입니다.",
+    ]
+
+    if performance.current_candidates:
+        lines.append("현재 추천/관찰 후보")
+        for signal in performance.current_candidates[:8]:
+            reference = _reference_price(signal)
+            lines.append(
+                f"- {signal.get('name') or signal.get('symbol')}({signal.get('symbol')}) / "
+                f"{signal.get('candidate_grade') or '등급 미정'} / "
+                f"{signal.get('entry_action') or signal.get('recommendation_label') or '조건 확인'} / "
+                f"기준가 {_money(reference)}"
+            )
+        if len(performance.current_candidates) > 8:
+            lines.append(f"- 그 외 {len(performance.current_candidates) - 8}개 후보")
+    else:
+        lines.append("현재 추천/관찰 후보\nA·B급 조건을 통과한 후보가 없습니다.")
+
+    if performance.evaluations:
+        lines.extend(
+            [
+                "추천 이력과 수익률",
+                "|추천일|종목|당시 등급|기준가|최신가|1D|5D|현재|SPY 대비|경과|결과|",
+                "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+            ]
+        )
+        for item in performance.evaluations:
+            lines.append(
+                "|"
+                + "|".join(
+                    [
+                        item.signal_date.isoformat(),
+                        f"{item.name}({item.symbol})",
+                        item.bucket,
+                        _money(item.reference_price),
+                        _money(item.latest_price),
+                        _percent(item.returns.get(1)),
+                        _percent(item.returns.get(5)),
+                        _percent(item.current_return),
+                        _percent(item.spy_relative_current),
+                        f"{item.holding_days}일",
+                        _outcome_label(item.outcome),
+                    ]
+                )
+                + "|"
+            )
+    else:
+        lines.append("추천 이력과 수익률\n아직 평가할 과거 추천이 없습니다.")
+
+    if performance.warnings:
+        lines.append(f"데이터 주의: 가격 확인 실패 {len(performance.warnings)}건은 집계에서 제외했습니다.")
+    return "\n".join(lines)
 
 
 def render_selection_review(evaluations: list[SignalEvaluation], warnings: list[str]) -> str:

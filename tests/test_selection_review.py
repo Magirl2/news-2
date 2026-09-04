@@ -6,8 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from market_briefing_bot.selection_review import (
+    collect_recommendation_performance,
     collect_signal_evaluations,
     evaluate_signal,
+    recommendation_performance_metrics,
+    render_recommendation_performance,
     render_selection_review,
 )
 
@@ -22,6 +25,67 @@ def _row(day: int, close: float, high: float | None = None, low: float | None = 
 
 
 class SelectionReviewTests(unittest.TestCase):
+    def test_recommendation_performance_filters_chase_candidates_and_calculates_alpha(self) -> None:
+        previous = {
+            "target_date": "2026-07-01",
+            "interest": [
+                {
+                    "date": "2026-07-01",
+                    "symbol": "AMD",
+                    "name": "AMD",
+                    "candidate_grade": "A급",
+                    "entry_style": "눌림 진입형",
+                    "start_entry_price": 100,
+                    "invalidation_price": 95,
+                    "first_target_price": 112,
+                },
+                {
+                    "date": "2026-07-01",
+                    "symbol": "TSLA",
+                    "name": "테슬라",
+                    "candidate_grade": "C급",
+                    "entry_action": "추격 금지",
+                    "close": 200,
+                },
+            ],
+        }
+        current = {
+            "target_date": "2026-07-03",
+            "interest": [
+                {"symbol": "NVDA", "candidate_grade": "B급", "score": 80, "close": 150},
+                {"symbol": "META", "candidate_grade": "C급", "score": 90, "close": 600},
+            ],
+        }
+
+        def fake_fetch(symbol: str) -> list[dict]:
+            if symbol == "SPY":
+                return [_row(1, 500), _row(2, 502), _row(3, 504)]
+            if symbol == "AMD":
+                return [_row(1, 100), _row(2, 105), _row(3, 110)]
+            raise AssertionError(f"excluded symbol was fetched: {symbol}")
+
+        performance = collect_recommendation_performance(
+            date(2026, 7, 3),
+            current,
+            previous,
+            price_fetcher=fake_fetch,
+        )
+        metrics = recommendation_performance_metrics(performance)
+
+        self.assertEqual([item.symbol for item in performance.evaluations], ["AMD"])
+        self.assertEqual([item["symbol"] for item in performance.current_candidates], ["NVDA"])
+        self.assertEqual(performance.excluded_current_count, 1)
+        self.assertEqual(performance.history_days, 1)
+        self.assertAlmostEqual(float(metrics["average_return"] or 0), 10.0)
+        self.assertAlmostEqual(float(metrics["average_relative"] or 0), 9.2)
+        self.assertEqual(performance.evaluations[0].holding_days, 2)
+
+        text = render_recommendation_performance(performance)
+        self.assertIn("추천 후보 성과판", text)
+        self.assertIn("C급 추격 금지", text)
+        self.assertIn("SPY 대비", text)
+        self.assertIn("+10.00%", text)
+
     def test_evaluate_signal_marks_target_first(self) -> None:
         signal = {
             "date": "2026-07-01",

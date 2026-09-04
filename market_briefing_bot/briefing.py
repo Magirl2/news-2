@@ -46,6 +46,14 @@ from .investment_plan import (
     load_previous_investment_signals,
     write_investment_signals,
 )
+from .selection_review import (
+    RecommendationPerformance,
+    SignalEvaluation,
+    collect_recommendation_performance,
+    recommendation_performance_metrics,
+    recommendation_performance_read,
+    render_recommendation_performance,
+)
 
 
 @dataclass(frozen=True)
@@ -1481,7 +1489,7 @@ def _render_report_sections(text: str) -> str:
     for block in [part.strip() for part in text.split("\n\n") if part.strip()]:
         lines = [line.rstrip() for line in block.splitlines()]
         title = lines[0].strip()
-        if title.startswith("뉴스 "):
+        if title.startswith("뉴스 ") or title == "추천 후보 성과판":
             continue
         body = _render_report_body_lines(lines[1:])
         class_name = "report-section"
@@ -1611,12 +1619,196 @@ def _jump_nav_html() -> str:
     <nav class="jump-nav" aria-label="보고서 바로가기">
       <strong>바로가기</strong>
       <a href="#quick-summary">빠른 요약</a>
+      <a href="#recommendation-performance">추천 성과</a>
       <a href="#charts">가격 차트</a>
       <a href="#sector-view">섹터</a>
       <a href="#news-dashboard">뉴스 요약</a>
       <a href="#news-analysis">뉴스 상세</a>
       <a href="#full-report">전체 근거</a>
     </nav>
+    """
+
+
+def _performance_percent(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):+.2f}%"
+
+
+def _performance_money(value: object) -> str:
+    try:
+        if value is None or value == "":
+            return "-"
+        return f"${float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _return_meter_html(value: float | None) -> str:
+    if value is None:
+        return '<span class="return-none">-</span>'
+    tone = "positive" if value > 0.001 else "negative" if value < -0.001 else "flat"
+    width = min(100, 12 + abs(value) * 8)
+    return (
+        f'<span class="return-meter return-{tone}">'
+        f'<span aria-hidden="true" style="width:{width:.1f}%"></span>'
+        f'<b>{html.escape(_performance_percent(value))}</b></span>'
+    )
+
+
+def _performance_outcome_label(value: str) -> str:
+    return {
+        "TARGET_FIRST": "목표 먼저",
+        "STOP_FIRST": "무효화 먼저",
+        "MIXED_SAME_DAY": "동일일 혼재",
+        "OPEN": "진행 중",
+        "NO_PRICE": "기준가 없음",
+        "NO_DATA": "시세 부족",
+        "NO_RISK_LEVELS": "가격 기준 부족",
+    }.get(value, value)
+
+
+def _performance_rows_html(items: list[SignalEvaluation], repeats: Counter[str]) -> str:
+    rows = []
+    for item in items:
+        grade = item.bucket.split(" / ", 1)[0]
+        grade_class = _report_badge_class(grade) or "report-badge"
+        repeated = repeats[item.symbol]
+        repeat_html = f"<small>{repeated}회 등장</small>" if repeated > 1 else ""
+        outcome = _performance_outcome_label(item.outcome)
+        outcome_tone = (
+            "tracking-success"
+            if item.outcome == "TARGET_FIRST"
+            else "tracking-failure"
+            if item.outcome == "STOP_FIRST"
+            else "tracking-hold"
+        )
+        cells = [
+            ("추천일", html.escape(item.signal_date.isoformat())),
+            (
+                "종목",
+                f"<strong>{html.escape(item.name)}({html.escape(item.symbol)})</strong>{repeat_html}",
+            ),
+            ("등급", f'<span class="{grade_class}">{html.escape(grade)}</span>'),
+            ("기준가", html.escape(_performance_money(item.reference_price))),
+            ("최신가", html.escape(_performance_money(item.latest_price))),
+            ("1D", _return_meter_html(item.returns.get(1))),
+            ("5D", _return_meter_html(item.returns.get(5))),
+            ("현재", _return_meter_html(item.current_return)),
+            ("SPY 대비", _return_meter_html(item.spy_relative_current)),
+            ("경과", f"{item.holding_days}거래일"),
+            ("상태", f'<span class="report-badge {outcome_tone}">{html.escape(outcome)}</span>'),
+        ]
+        rows.append(
+            "<tr>"
+            + "".join(
+                f'<td data-label="{html.escape(label, quote=True)}">{value}</td>'
+                for label, value in cells
+            )
+            + "</tr>"
+        )
+    return "".join(rows)
+
+
+def _recommendation_performance_html(performance: RecommendationPerformance) -> str:
+    metrics = recommendation_performance_metrics(performance)
+    tracked_count = int(metrics["tracked_count"] or 0)
+    sample_label = "초기 표본" if tracked_count < 30 else "누적 표본"
+    sample_class = "sample-early" if tracked_count < 30 else "sample-mature"
+    positive_ratio = metrics["positive_ratio"]
+    positive_text = "-" if positive_ratio is None else f"{float(positive_ratio):.1f}%"
+    current_cards = []
+    for signal in performance.current_candidates:
+        grade = str(signal.get("candidate_grade") or "등급 미정")
+        grade_class = _report_badge_class(grade) or "report-badge"
+        reference = signal.get("start_entry_price") or signal.get("close")
+        current_cards.append(
+            f"""
+            <article class="recommendation-card">
+              <div class="recommendation-card-head">
+                <strong>{html.escape(str(signal.get('name') or signal.get('symbol') or '종목'))}</strong>
+                <span>{html.escape(str(signal.get('symbol') or ''))}</span>
+                <b class="{grade_class}">{html.escape(grade)}</b>
+              </div>
+              <p>{html.escape(str(signal.get('entry_action') or signal.get('recommendation_label') or '조건 확인'))}</p>
+              <dl>
+                <div><dt>기준가</dt><dd>{html.escape(_performance_money(reference))}</dd></div>
+                <div><dt>1차 목표</dt><dd>{html.escape(_performance_money(signal.get('first_target_price')))}</dd></div>
+                <div><dt>무효화</dt><dd>{html.escape(_performance_money(signal.get('invalidation_price')))}</dd></div>
+              </dl>
+              <small>{html.escape(str(signal.get('entry_style') or signal.get('position_mode') or '가격 조건을 확인하세요.'))}</small>
+            </article>
+            """
+        )
+    current_html = "".join(current_cards) or (
+        '<p class="performance-empty">오늘은 A·B급 조건을 통과한 추천/관찰 후보가 없습니다.</p>'
+    )
+
+    evaluations = performance.evaluations
+    repeats: Counter[str] = Counter(item.symbol for item in evaluations)
+    visible = evaluations[:8]
+    remaining = evaluations[8:]
+    table_head = (
+        "<thead><tr><th>추천일</th><th>종목</th><th>등급</th><th>기준가</th><th>최신가</th>"
+        "<th>1D</th><th>5D</th><th>현재</th><th>SPY 대비</th><th>경과</th><th>상태</th></tr></thead>"
+    )
+    if visible:
+        recent_table = (
+            '<div class="report-table-wrap report-table-wrap-wide performance-table-wrap">'
+            f'<table class="report-table report-table-wide performance-table">{table_head}'
+            f"<tbody>{_performance_rows_html(visible, repeats)}</tbody></table></div>"
+        )
+    else:
+        recent_table = (
+            '<p class="performance-empty">아직 평가할 과거 추천이 없습니다. 다음 거래일부터 수익률이 쌓입니다.</p>'
+        )
+    more_html = ""
+    if remaining:
+        more_html = (
+            '<details class="performance-more"><summary>'
+            f"나머지 추천 이력 {len(remaining)}건 보기</summary>"
+            '<div class="report-table-wrap report-table-wrap-wide performance-table-wrap">'
+            f'<table class="report-table report-table-wide performance-table">{table_head}'
+            f"<tbody>{_performance_rows_html(remaining, repeats)}</tbody></table></div></details>"
+        )
+
+    warning_html = ""
+    if performance.warnings:
+        warning_html = (
+            '<p class="performance-warning">'
+            f"가격 확인 실패 {len(performance.warnings)}건은 성과 집계에서 제외했습니다."
+            "</p>"
+        )
+
+    return f"""
+    <section class="recommendation-performance" id="recommendation-performance">
+      <div class="performance-head">
+        <div>
+          <p class="eyebrow">Recommendation Ledger</p>
+          <h2>추천 후보 성과판</h2>
+          <p>A급 진입 후보와 B급 조건부 관찰 후보만 모았습니다. C급 추격 금지·제외 {performance.excluded_current_count}개는 성과에서 뺐습니다.</p>
+        </div>
+        <span class="sample-badge {sample_class}">{sample_label}</span>
+      </div>
+      <div class="performance-metrics">
+        <div><span>누적 추천</span><strong>{tracked_count}건</strong><small>{int(metrics['symbol_count'] or 0)}종목 · {performance.history_days}거래일</small></div>
+        <div><span>평균 수익률</span><strong>{html.escape(_performance_percent(metrics['average_return']))}</strong><small>평가 가능 {int(metrics['measured_count'] or 0)}건</small></div>
+        <div><span>플러스 비율</span><strong>{html.escape(positive_text)}</strong><small>0% 초과 비중</small></div>
+        <div><span>SPY 대비</span><strong>{html.escape(_performance_percent(metrics['average_relative']))}</strong><small>같은 보유기간 평균</small></div>
+      </div>
+      <p class="performance-read"><b>한줄 해석</b>{html.escape(recommendation_performance_read(performance))}</p>
+      <div class="performance-note">
+        <b>읽기 전에</b>
+        <span>시작 진입가가 있으면 그 가격, 없으면 추천일 종가가 기준입니다. 배당·수수료·실제 체결은 반영하지 않습니다.</span>
+        <span>최근 최대 60건을 추적합니다. 5D는 5거래일이 지난 {int(metrics['mature_5d_count'] or 0)}건만 표시하며, 30건 미만은 결론보다 기록 축적으로 보세요.</span>
+      </div>
+      <div class="performance-subhead"><h3>오늘의 추천·관찰 후보</h3><span>{len(performance.current_candidates)}개</span></div>
+      <div class="recommendation-grid">{current_html}</div>
+      <div class="performance-subhead"><h3>추천 이력과 수익률</h3><span>최근 8건 우선</span></div>
+      {recent_table}
+      {more_html}
+      {warning_html}
+    </section>
     """
 
 
@@ -1695,6 +1887,7 @@ def _write_html_report(
     news_items: list[NewsItem],
     watchlist_actions: list[WatchlistAction],
     interpretations: dict[str, NewsInterpretation] | None = None,
+    recommendation_performance: RecommendationPerformance | None = None,
 ) -> Path:
     html_path = report_path.with_suffix(".html")
     sectors = sorted(
@@ -1745,6 +1938,11 @@ def _write_html_report(
     rendered_sections = _render_report_sections(text)
     news_dashboard = _news_dashboard_html(snapshot, news_items)
     quick_summary = _mobile_quick_summary_html(snapshot, sectors, news_items, watchlist_actions)
+    performance_section = (
+        _recommendation_performance_html(recommendation_performance)
+        if recommendation_performance is not None
+        else ""
+    )
     chart_section = _market_charts_html(snapshot, sectors)
     freshness = _data_freshness_html(snapshot)
     jump_nav = _jump_nav_html()
@@ -2002,6 +2200,7 @@ def _write_html_report(
     {jump_nav}
     {freshness}
     {quick_summary}
+    {performance_section}
     {chart_section}
     <section class="sector-overview" id="sector-view">
       <div class="section-title-row">
@@ -2061,6 +2260,15 @@ def build_briefing(config: Config) -> Briefing:
     previous_signals = load_previous_investment_signals(REPORTS_DIR, target_date)
     tracking_text, tracking_warnings = build_previous_signal_review(snapshot, previous_signals)
     warnings.extend(tracking_warnings)
+    recommendation_performance = collect_recommendation_performance(
+        target_date,
+        investment_package.signals,
+        previous_signals,
+    )
+    warnings.extend(recommendation_performance.warnings)
+    recommendation_performance_text = render_recommendation_performance(
+        recommendation_performance
+    )
     watchlist_actions, watchlist_action_warnings = build_watchlist_actions(
         config.watchlist_symbols,
         snapshot,
@@ -2095,6 +2303,7 @@ def build_briefing(config: Config) -> Briefing:
         ),
         _data_freshness_text(snapshot),
         _quick_takeaways_text(snapshot, sectors, news_items),
+        recommendation_performance_text,
         _today_decision(snapshot, sectors, news_items),
         _watchlist_actions_text(watchlist_actions),
         _news_dashboard(snapshot, news_items),
@@ -2135,6 +2344,7 @@ def build_briefing(config: Config) -> Briefing:
         news_items,
         watchlist_actions,
         news_interpretations,
+        recommendation_performance,
     )
 
     source_names = [snapshot.source] + sorted({item.source for item in news_items})

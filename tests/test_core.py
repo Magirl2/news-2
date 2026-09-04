@@ -21,6 +21,7 @@ from market_briefing_bot.briefing import (
     _news_cards_html,
     _news_price_reaction,
     _quick_takeaways_text,
+    _recommendation_performance_html,
     _report_badge_class,
     _render_report_sections,
     _risk_card,
@@ -84,6 +85,7 @@ from market_briefing_bot.ai_news import (
     build_news_interpretations,
     rule_based_news_interpretation,
 )
+from market_briefing_bot.selection_review import RecommendationPerformance, SignalEvaluation
 
 
 class MarketCalendarTests(unittest.TestCase):
@@ -1027,6 +1029,53 @@ class InvestmentPlanTests(unittest.TestCase):
 
         self.assertNotIn("previous_signals", package.signals)
 
+    def test_signal_file_carries_compact_recommendation_history(self) -> None:
+        package = InvestmentPackage(
+            text="",
+            warnings=[],
+            interest_plans=[],
+            avoid_plans=[],
+            signals={"target_date": "2026-07-03", "interest": [], "avoid": []},
+        )
+        previous = {
+            "target_date": "2026-07-02",
+            "interest": [
+                {
+                    "date": "2026-07-02",
+                    "symbol": "NVDA",
+                    "name": "엔비디아",
+                    "candidate_grade": "A급",
+                    "close": 100,
+                    "can_enter_reason": "history에는 필요 없는 긴 설명",
+                }
+            ],
+            "avoid": [{"symbol": "TSLA"}],
+            "recommendation_history": [
+                {
+                    "target_date": "2026-07-01",
+                    "interest": [{"date": "2026-07-01", "symbol": "AMD", "close": 90}],
+                }
+            ],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            reports_dir = Path(temp_dir)
+            write_investment_signals(reports_dir, package, previous)
+            latest = json.loads(
+                (reports_dir / "signals" / "latest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(
+            [item["target_date"] for item in latest["recommendation_history"]],
+            ["2026-07-01", "2026-07-02"],
+        )
+        self.assertEqual(latest["recommendation_history"][1]["interest"][0]["symbol"], "NVDA")
+        self.assertNotIn(
+            "can_enter_reason",
+            latest["recommendation_history"][1]["interest"][0],
+        )
+        self.assertNotIn("recommendation_history", latest["previous_signals"])
+
     def test_previous_signal_review_marks_entry_hit(self) -> None:
         snapshot = MarketSnapshot(
             target_date=date(2026, 7, 3),
@@ -1330,6 +1379,55 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn('href="#news-analysis"', rendered)
         self.assertIn('class="full-report" id="full-report"', rendered)
         self.assertIn("전체 상세 근거 펼치기", rendered)
+
+    def test_recommendation_performance_html_shows_summary_candidates_and_returns(self) -> None:
+        evaluation = SignalEvaluation(
+            signal_date=date(2026, 7, 2),
+            section="interest",
+            symbol="AMD",
+            name="AMD",
+            bucket="A급 / 눌림 진입형",
+            reference_price=100,
+            invalidation_price=95,
+            first_target_price=110,
+            returns={1: 2.0, 3: None, 5: None, 10: None, 20: None},
+            spy_relative_5d=None,
+            latest_price=102,
+            holding_days=1,
+            current_return=2.0,
+            spy_relative_current=1.2,
+            max_favorable_percent=3.0,
+            max_adverse_percent=-1.0,
+            outcome="OPEN",
+            r_result=0.4,
+            note="진행 중",
+        )
+        performance = RecommendationPerformance(
+            current_candidates=[
+                {
+                    "symbol": "NVDA",
+                    "name": "엔비디아",
+                    "candidate_grade": "B급",
+                    "entry_action": "눌림 확인 후 가능",
+                    "close": 150,
+                    "first_target_price": 160,
+                    "invalidation_price": 145,
+                }
+            ],
+            evaluations=[evaluation],
+            history_days=1,
+            excluded_current_count=2,
+            warnings=[],
+        )
+
+        rendered = _recommendation_performance_html(performance)
+
+        self.assertIn('id="recommendation-performance"', rendered)
+        self.assertIn("엔비디아", rendered)
+        self.assertIn("SPY 대비", rendered)
+        self.assertIn("+2.00%", rendered)
+        self.assertIn("초기 표본", rendered)
+        self.assertIn("C급 추격 금지·제외 2개", rendered)
 
     def test_position_mode_and_risk_reward_badges_render(self) -> None:
         rendered = _render_report_sections(

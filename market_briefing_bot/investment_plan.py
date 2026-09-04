@@ -1622,6 +1622,71 @@ def build_investment_report(snapshot: MarketSnapshot, sectors: list[Quote], news
     return package.text, package.warnings
 
 
+_RECOMMENDATION_HISTORY_LIMIT = 40
+_HISTORY_SIGNAL_FIELDS = (
+    "date",
+    "symbol",
+    "name",
+    "sector",
+    "close",
+    "score",
+    "candidate_grade",
+    "entry_style",
+    "recommendation_state",
+    "recommendation_label",
+    "entry_action",
+    "position_mode",
+    "start_entry_price",
+    "invalidation_price",
+    "first_target_price",
+)
+
+
+def _compact_history_snapshot(payload: dict[str, Any]) -> dict[str, Any] | None:
+    target_date = str(payload.get("target_date") or "")
+    if not target_date:
+        return None
+    interest = []
+    for raw_signal in payload.get("interest") or []:
+        if not isinstance(raw_signal, dict):
+            continue
+        interest.append(
+            {
+                key: raw_signal.get(key)
+                for key in _HISTORY_SIGNAL_FIELDS
+                if key in raw_signal
+            }
+        )
+    return {"target_date": target_date, "interest": interest}
+
+
+def _recommendation_history(
+    previous_signals: dict[str, Any] | None,
+    current_date: str,
+) -> list[dict[str, Any]]:
+    if not previous_signals:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    carried = previous_signals.get("recommendation_history")
+    if not isinstance(carried, list):
+        carried = previous_signals.get("history")
+    if isinstance(carried, list):
+        candidates.extend(item for item in carried if isinstance(item, dict))
+    candidates.append(previous_signals)
+
+    by_date: dict[str, dict[str, Any]] = {}
+    for payload in candidates:
+        compact = _compact_history_snapshot(payload)
+        if compact is None:
+            continue
+        payload_date = str(compact["target_date"])
+        if payload_date < current_date:
+            by_date[payload_date] = compact
+    ordered = [by_date[key] for key in sorted(by_date)]
+    return ordered[-_RECOMMENDATION_HISTORY_LIMIT:]
+
+
 def write_investment_signals(
     reports_dir: Path,
     package: InvestmentPackage,
@@ -1629,14 +1694,18 @@ def write_investment_signals(
 ) -> None:
     signals_dir = reports_dir / "signals"
     signals_dir.mkdir(parents=True, exist_ok=True)
+    current_date = str(package.signals.get("target_date") or "")
+    package.signals["recommendation_history"] = _recommendation_history(
+        previous_signals,
+        current_date,
+    )
     if previous_signals:
         previous_date = str(previous_signals.get("target_date") or "")
-        current_date = str(package.signals.get("target_date") or "")
         if previous_date and previous_date < current_date:
             package.signals["previous_signals"] = {
                 key: value
                 for key, value in previous_signals.items()
-                if key != "previous_signals"
+                if key not in {"previous_signals", "recommendation_history", "history"}
             }
     target_date = package.signals["target_date"]
     text = json.dumps(package.signals, ensure_ascii=False, indent=2)
@@ -1655,7 +1724,18 @@ def load_previous_investment_signals(reports_dir: Path, current_date: date) -> d
             if isinstance(embedded_previous, dict):
                 previous_date = str(embedded_previous.get("target_date") or "")
                 if previous_date and previous_date < current_date.isoformat():
-                    return embedded_previous
+                    restored = dict(embedded_previous)
+                    carried = data.get("recommendation_history")
+                    if isinstance(carried, list):
+                        older_history = [
+                            item
+                            for item in carried
+                            if isinstance(item, dict)
+                            and str(item.get("target_date") or "") < previous_date
+                        ]
+                        if older_history:
+                            restored["recommendation_history"] = older_history
+                    return restored
         except json.JSONDecodeError:
             return None
 
