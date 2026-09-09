@@ -11,7 +11,14 @@ from urllib.parse import urlparse
 
 from .briefing import Briefing, build_briefing
 from .config import ENV_FILE, LOGS_DIR, REPORTS_DIR, SEND_STATE_FILE, TOKEN_FILE, ensure_project_dirs, load_config
-from .kakao import KakaoClient, KakaoError, build_auth_url, exchange_code, run_local_login
+from .kakao import (
+    KakaoClient,
+    KakaoError,
+    build_auth_url,
+    exchange_code,
+    public_kakao_error_summary,
+    run_local_login,
+)
 from .market_calendar import current_market_note, last_completed_trading_day
 from .selection_review import build_selection_review
 
@@ -121,7 +128,11 @@ def _write_env_values(updates: dict[str, str]) -> None:
     ENV_FILE.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 
 
-def _build_github_secrets_text(rest_api_key: str, token_data: dict) -> str:
+def _build_github_secrets_text(
+    rest_api_key: str,
+    token_data: dict,
+    client_secret: str = "",
+) -> str:
     compact_tokens = json.dumps(token_data, ensure_ascii=False, separators=(",", ":"))
     return "\n".join(
         [
@@ -137,6 +148,11 @@ def _build_github_secrets_text(rest_api_key: str, token_data: dict) -> str:
             "Secret name: KAKAO_TOKENS_JSON",
             "Secret value:",
             compact_tokens,
+            "",
+            "[앱에서 Client Secret을 사용하는 경우 필수]",
+            "Secret name: KAKAO_CLIENT_SECRET",
+            "Secret value:",
+            client_secret or "Kakao Developers에서 Client Secret 사용 여부를 확인하세요.",
             "",
             "[선택 - 보고서 품질 개선]",
             "Secret name: WATCHLIST_SYMBOLS",
@@ -558,7 +574,11 @@ def cmd_prepare_cloud_secrets(args: argparse.Namespace) -> int:
 
     CLOUD_SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     CLOUD_SECRETS_FILE.write_text(
-        _build_github_secrets_text(config.kakao_rest_api_key, token_data),
+        _build_github_secrets_text(
+            config.kakao_rest_api_key,
+            token_data,
+            config.kakao_client_secret,
+        ),
         encoding="utf-8",
     )
     print("GitHub Actions용 Secret 정리 파일을 만들었습니다.")
@@ -728,6 +748,11 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except KakaoError as exc:
         logging.exception("Kakao error")
+        if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+            print(
+                f"::error title=Kakao delivery failed::{public_kakao_error_summary(exc)}",
+                file=sys.stderr,
+            )
         print(f"카카오 설정을 확인해 주세요: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 - show friendly CLI error.

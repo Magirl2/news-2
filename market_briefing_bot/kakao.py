@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -31,7 +32,11 @@ def explain_kakao_error(status_code: int, body: str) -> str:
             "Redirect URI가 맞지 않을 수 있습니다. Kakao Developers와 .env의 "
             "KAKAO_REDIRECT_URI가 http://localhost:8765/callback 으로 같은지 확인해 주세요."
         )
-    if "koe010" in lower_body or "bad client credentials" in lower_body:
+    if (
+        "koe010" in lower_body
+        or "bad client credentials" in lower_body
+        or "invalid_client" in lower_body
+    ):
         hints.append(
             "REST API 키가 틀렸거나 Kakao Developers에서 Client Secret 기능이 켜져 있을 수 있습니다. "
             "앱 키 메뉴의 REST API 키를 다시 확인하고, 카카오 로그인 > 보안에서 Client Secret을 끄거나 "
@@ -41,6 +46,11 @@ def explain_kakao_error(status_code: int, body: str) -> str:
         hints.append(
             "인증 코드가 만료됐거나 이미 사용됐을 수 있습니다. "
             "py -m market_briefing_bot kakao-login 을 다시 실행해 주세요."
+        )
+    if "expired_or_invalid_refresh_token" in lower_body:
+        hints.append(
+            "refresh token이 만료됐거나 폐기됐습니다. "
+            "py -m market_briefing_bot kakao-login 을 다시 실행해 새 토큰을 발급해 주세요."
         )
     if "insufficient_scope" in lower_body or "talk_message" in lower_body:
         hints.append(
@@ -67,6 +77,32 @@ def explain_kakao_error(status_code: int, body: str) -> str:
         )
 
     return " ".join(hints)
+
+
+def public_kakao_error_summary(error: object) -> str:
+    """Return a secret-free error summary suitable for a public Actions annotation."""
+    text = " ".join(str(error).split())
+    lower_text = text.lower()
+    status_match = re.search(r"http\s+(\d{3})", lower_text)
+    status = f"HTTP {status_match.group(1)}" if status_match else "HTTP 상태 미확인"
+
+    if "expired_or_invalid_refresh_token" in lower_text:
+        cause = "refresh token 만료 또는 폐기"
+    elif "koe010" in lower_text or "bad client credentials" in lower_text or "invalid_client" in lower_text:
+        cause = "REST API 키 또는 Client Secret 불일치"
+    elif "invalid_token" in lower_text or "access token" in lower_text or "401" in lower_text:
+        cause = "access token 만료 또는 무효"
+    elif "talk_message" in lower_text or "insufficient_scope" in lower_text:
+        cause = "카카오톡 메시지 권한 누락"
+    elif "redirect_uri" in lower_text or "koe006" in lower_text:
+        cause = "Redirect URI 불일치"
+    elif "domain" in lower_text or "url" in lower_text:
+        cause = "메시지 링크 도메인 미등록"
+    elif "refresh_token" in lower_text:
+        cause = "refresh token 누락 또는 갱신 실패"
+    else:
+        cause = "카카오 API 요청 실패"
+    return f"{status}: {cause}"
 
 
 def _post_form(url: str, data: dict[str, str], headers: dict[str, str] | None = None) -> dict[str, Any]:

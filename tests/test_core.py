@@ -32,7 +32,14 @@ from market_briefing_bot.briefing import (
     _warnings_block,
     _write_html_report,
 )
-from market_briefing_bot.kakao import KakaoClient, KakaoError, _load_tokens, explain_kakao_error, split_message
+from market_briefing_bot.kakao import (
+    KakaoClient,
+    KakaoError,
+    _load_tokens,
+    explain_kakao_error,
+    public_kakao_error_summary,
+    split_message,
+)
 from market_briefing_bot.market_calendar import (
     early_close_reason,
     holiday_reason,
@@ -141,6 +148,17 @@ class KakaoMessageTests(unittest.TestCase):
     def test_kakao_error_explains_redirect_uri(self) -> None:
         message = explain_kakao_error(400, '{"error":"invalid_grant","error_description":"KOE006"}')
         self.assertIn("Redirect URI", message)
+
+    def test_public_kakao_error_summary_exposes_cause_without_response_body(self) -> None:
+        error = KakaoError(
+            'Kakao API 오류: HTTP 400. 원문: {"error":"invalid_grant",'
+            '"error_description":"expired_or_invalid_refresh_token"}'
+        )
+
+        summary = public_kakao_error_summary(error)
+
+        self.assertEqual(summary, "HTTP 400: refresh token 만료 또는 폐기")
+        self.assertNotIn("error_description", summary)
 
     def test_load_tokens_from_environment(self) -> None:
         with patch.dict("os.environ", {"KAKAO_TOKENS_JSON": '{"refresh_token":"abc"}'}):
@@ -1954,6 +1972,7 @@ class CloudSecretsTests(unittest.TestCase):
         text = _build_github_secrets_text("rest-key", {"refresh_token": "refresh"})
         self.assertIn("KAKAO_REST_API_KEY", text)
         self.assertIn("KAKAO_TOKENS_JSON", text)
+        self.assertIn("KAKAO_CLIENT_SECRET", text)
         self.assertIn("WATCHLIST_SYMBOLS", text)
         self.assertIn("ALPHA_VANTAGE_API_KEY", text)
         self.assertIn('"refresh_token":"refresh"', text)

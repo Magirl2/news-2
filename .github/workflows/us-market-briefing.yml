@@ -10,8 +10,13 @@ on:
       - "tests/**"
       - ".github/workflows/us-market-briefing.yml"
   schedule:
-    # 07:10 KST. This is after the regular US market close in both standard time and daylight saving time.
-    - cron: "10 22 * * 1-5"
+    # 09:00 KST Tuesday-Saturday, after each Monday-Friday US market close.
+    # GitHub evaluates cron in UTC, so 00:00 UTC maps to 09:00 KST.
+    - cron: "0 0 * * 2-6"
+
+concurrency:
+  group: us-market-kakao-briefing
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -27,6 +32,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     env:
       KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
       KAKAO_REDIRECT_URI: http://localhost:8765/callback
       KAKAO_LINK_URL: https://finance.yahoo.com/markets
       KAKAO_TOKENS_JSON: ${{ secrets.KAKAO_TOKENS_JSON }}

@@ -5,6 +5,9 @@ $TaskNames = @(
   "US Market Kakao Briefing 0710",
   "US Market Kakao Briefing 0810",
   "US Market Kakao Briefing 0910",
+  "US Market Kakao Briefing 0900",
+  "US Market Kakao Briefing 0930",
+  "US Market Kakao Briefing 1000",
   "US Market Kakao Briefing Logon"
 )
 

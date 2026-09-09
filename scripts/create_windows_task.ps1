@@ -5,9 +5,9 @@ $RunScript = Join-Path $PSScriptRoot "run_daily.ps1"
 $TaskCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$RunScript`""
 
 $Tasks = @(
-  @{ Name = "US Market Kakao Briefing 0710"; Schedule = "DAILY"; Time = "07:10" },
-  @{ Name = "US Market Kakao Briefing 0810"; Schedule = "DAILY"; Time = "08:10" },
-  @{ Name = "US Market Kakao Briefing 0910"; Schedule = "DAILY"; Time = "09:10" },
+  @{ Name = "US Market Kakao Briefing 0900"; Schedule = "DAILY"; Time = "09:00" },
+  @{ Name = "US Market Kakao Briefing 0930"; Schedule = "DAILY"; Time = "09:30" },
+  @{ Name = "US Market Kakao Briefing 1000"; Schedule = "DAILY"; Time = "10:00" },
   @{ Name = "US Market Kakao Briefing Logon"; Schedule = "ONLOGON"; Time = "" }
 )
 
@@ -35,9 +35,9 @@ foreach ($Task in $Tasks) {
 }
 
 Write-Host "Windows daily retry tasks created."
-Write-Host "- US Market Kakao Briefing 0710: 7:10 AM"
-Write-Host "- US Market Kakao Briefing 0810: 8:10 AM"
-Write-Host "- US Market Kakao Briefing 0910: 9:10 AM"
+Write-Host "- US Market Kakao Briefing 0900: 9:00 AM"
+Write-Host "- US Market Kakao Briefing 0930: 9:30 AM retry"
+Write-Host "- US Market Kakao Briefing 1000: 10:00 AM retry"
 Write-Host "- US Market Kakao Briefing Logon: at Windows logon, if Windows allows it"
 Write-Host "The bot sends each US market date only once, so retry triggers should not duplicate messages."
 Write-Host "Task logs will be saved in logs\scheduled-task.log."

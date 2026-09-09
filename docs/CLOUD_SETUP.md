@@ -25,7 +25,7 @@
 .github/workflows/us-market-briefing.yml
 ```
 
-기본 실행 시간은 한국 시간 오전 7시 10분입니다. 미국장이 서머타임이어도 정규장 마감 이후입니다.
+기본 실행 시간은 한국 시간 화요일~토요일 오전 9시입니다. 월요일~금요일 미국장 마감 보고서를 다음 날 아침에 보냅니다. GitHub Actions 예약은 서버 부하에 따라 몇 분 이상 늦어질 수 있으므로 초 단위 정시 실행을 보장하지는 않습니다.
 
 ## GitHub Secrets에 넣을 값
 
@@ -34,11 +34,14 @@ GitHub 저장소의 `Settings > Secrets and variables > Actions`에 아래 값�
 ```text
 KAKAO_REST_API_KEY
 KAKAO_TOKENS_JSON
+KAKAO_CLIENT_SECRET
 ```
 
 `KAKAO_REST_API_KEY`는 Kakao Developers의 REST API 키입니다.
 
 `KAKAO_TOKENS_JSON`은 내 컴퓨터에서 카카오 로그인을 마친 뒤 생기는 아래 파일의 전체 내용입니다.
+
+`KAKAO_CLIENT_SECRET`은 Kakao Developers에서 Client Secret 기능을 사용하는 앱에 필요합니다. 기능을 켰다면 같은 이름의 GitHub Secret으로 반드시 추가합니다.
 
 ```text
 .secrets\kakao_tokens.json
