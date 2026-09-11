@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from .briefing import Briefing, build_briefing
 from .config import ENV_FILE, LOGS_DIR, REPORTS_DIR, SEND_STATE_FILE, TOKEN_FILE, ensure_project_dirs, load_config
+from .delivery_schedule import wait_until_local_time
 from .kakao import (
     KakaoClient,
     KakaoError,
@@ -425,6 +426,19 @@ def cmd_send_built(args: argparse.Namespace) -> int:
         raise
 
 
+def cmd_wait_until(args: argparse.Namespace) -> int:
+    waited = wait_until_local_time(
+        args.time,
+        args.timezone,
+        max_wait_seconds=args.max_wait_seconds,
+    )
+    if waited:
+        print(f"{args.timezone} {args.time}까지 {waited / 60:.1f}분 기다렸습니다.")
+    else:
+        print(f"{args.timezone} {args.time}이 지났으므로 바로 발송을 진행합니다.")
+    return 0
+
+
 def cmd_send_once(args: argparse.Namespace) -> int:
     config = load_config()
     target_date: str | None = None
@@ -681,6 +695,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     send_built = subparsers.add_parser("send-built", help="이미 만들어진 최신 보고서를 카카오톡으로 보내기")
     send_built.set_defaults(func=cmd_send_built)
+
+    wait_until = subparsers.add_parser("wait-until", help="예약 발송 시각까지 기다리기")
+    wait_until.add_argument("--time", default="09:00", help="24시간제 발송 시각 (HH:MM)")
+    wait_until.add_argument("--timezone", default="Asia/Seoul", help="발송 기준 시간대")
+    wait_until.add_argument(
+        "--max-wait-seconds",
+        type=int,
+        default=900,
+        help="잘못된 예약으로 장시간 대기하지 않도록 제한하는 최대 초",
+    )
+    wait_until.set_defaults(func=cmd_wait_until)
 
     send_once = subparsers.add_parser("send-once", help="자동 실행용: 같은 미국장 기준일은 한 번만 보내기")
     send_once.set_defaults(func=cmd_send_once)

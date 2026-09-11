@@ -64,6 +64,11 @@ from market_briefing_bot.news import (
     korean_news_summary,
 )
 from market_briefing_bot.earnings_calendar import build_earnings_calendar
+from market_briefing_bot.delivery_schedule import (
+    parse_clock,
+    seconds_until_local_time,
+    wait_until_local_time,
+)
 from market_briefing_bot.event_calendar import build_event_calendar
 from market_briefing_bot.professional_review import build_professional_review
 from market_briefing_bot.sec_filings import build_sec_filing_alert
@@ -110,6 +115,49 @@ class MarketCalendarTests(unittest.TestCase):
     def test_after_market_close_uses_same_trading_day(self) -> None:
         run_time = datetime(2026, 7, 8, 23, 18, tzinfo=timezone.utc)
         self.assertEqual(last_completed_trading_day(run_time), date(2026, 7, 8))
+
+
+class DeliveryScheduleTests(unittest.TestCase):
+    def test_waits_from_0856_until_0900_kst(self) -> None:
+        now = datetime(2026, 9, 10, 23, 56, tzinfo=timezone.utc)
+
+        self.assertEqual(seconds_until_local_time("09:00", "Asia/Seoul", now=now), 240.0)
+
+    def test_does_not_wait_after_0900_kst(self) -> None:
+        now = datetime(2026, 9, 11, 0, 1, tzinfo=timezone.utc)
+
+        self.assertEqual(seconds_until_local_time("09:00", "Asia/Seoul", now=now), 0.0)
+
+    def test_wait_calls_injected_sleeper(self) -> None:
+        waits: list[float] = []
+        now = datetime(2026, 9, 10, 23, 58, tzinfo=timezone.utc)
+
+        waited = wait_until_local_time(
+            "09:00",
+            "Asia/Seoul",
+            max_wait_seconds=300,
+            now=now,
+            sleep_fn=waits.append,
+        )
+
+        self.assertEqual(waited, 120.0)
+        self.assertEqual(waits, [120.0])
+
+    def test_rejects_wait_longer_than_guard(self) -> None:
+        now = datetime(2026, 9, 10, 23, 40, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(RuntimeError, "허용 대기"):
+            wait_until_local_time(
+                "09:00",
+                "Asia/Seoul",
+                max_wait_seconds=900,
+                now=now,
+                sleep_fn=lambda _seconds: None,
+            )
+
+    def test_rejects_invalid_clock(self) -> None:
+        with self.assertRaisesRegex(ValueError, "HH:MM"):
+            parse_clock("9am")
 
 
 class MarketDataFallbackTests(unittest.TestCase):

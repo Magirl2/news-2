@@ -10,9 +10,9 @@ on:
       - "tests/**"
       - ".github/workflows/us-market-briefing.yml"
   schedule:
-    # 09:00 KST Tuesday-Saturday, after each Monday-Friday US market close.
-    # GitHub evaluates cron in UTC, so 00:00 UTC maps to 09:00 KST.
-    - cron: "0 0 * * 2-6"
+    # Start at 08:55 KST Tuesday-Saturday, away from GitHub's busy top-of-hour queue.
+    # The delivery gate below holds the Kakao message until 09:00 KST.
+    - cron: "55 23 * * 1-5"
 
 concurrency:
   group: us-market-kakao-briefing
@@ -135,6 +135,14 @@ jobs:
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Hold scheduled delivery until 09:00 KST
+        if: github.event_name == 'schedule'
+        run: >
+          python -m market_briefing_bot wait-until
+          --time 09:00
+          --timezone Asia/Seoul
+          --max-wait-seconds 900
 
       - name: Send Kakao briefing
         run: python -m market_briefing_bot send-built
