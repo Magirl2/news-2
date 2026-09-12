@@ -131,6 +131,8 @@ Windows 작업 스케줄러에 매일 오전 9시 실행 작업과 9시 30분·1
 
 GitHub Actions로 옮기고 싶을 때는 `docs\CLOUD_SETUP.md`를 보면 됩니다. 템플릿 파일은 `.github\workflows\us-market-briefing.yml`에 준비되어 있습니다.
 
+배포된 사이트의 첫 화면은 최신 글로 바로 넘기지 않고 일자별 리포트 아카이브를 보여줍니다. 각 리포트 상단의 날짜 선택기와 이전·다음 버튼으로 다른 거래일 리포트를 바로 열 수 있습니다.
+
 카카오 테스트까지 끝난 뒤 아래 명령을 실행하면 GitHub Secrets에 넣을 값을 `.secrets\github_actions_secrets.txt`에 정리해 줍니다.
 
 ```powershell

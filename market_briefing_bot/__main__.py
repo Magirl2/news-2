@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 from .briefing import Briefing, build_briefing
@@ -22,6 +23,7 @@ from .kakao import (
 )
 from .market_calendar import current_market_note, last_completed_trading_day
 from .selection_review import build_selection_review
+from .site_builder import build_site
 
 
 CLOUD_SECRETS_FILE = TOKEN_FILE.parent / "github_actions_secrets.txt"
@@ -680,6 +682,12 @@ def cmd_selection_review(args: argparse.Namespace) -> int:
     return 0 if text else 2
 
 
+def cmd_build_site(args: argparse.Namespace) -> int:
+    count = build_site(args.source, args.output)
+    print(f"일자별 리포트 사이트를 만들었습니다: {count}개")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="py -m market_briefing_bot",
@@ -756,6 +764,11 @@ def build_parser() -> argparse.ArgumentParser:
     selection_review.add_argument("--horizon", type=int, default=10, help="검증할 최대 거래일 수")
     selection_review.add_argument("--limit", type=int, default=24, help="가져올 표본 수")
     selection_review.set_defaults(func=cmd_selection_review)
+
+    build_site_parser = subparsers.add_parser("build-site", help="일자별 리포트 Pages 사이트 만들기")
+    build_site_parser.add_argument("--source", type=Path, default=Path("reports"), help="리포트 원본 폴더")
+    build_site_parser.add_argument("--output", type=Path, default=Path("site"), help="사이트 출력 폴더")
+    build_site_parser.set_defaults(func=cmd_build_site)
 
     return parser
 
